@@ -1,12 +1,10 @@
-# Terabox Download Bot Dependencies
-
 # Telegram Bot
 python-telegram-bot==20.7
-telegram==0.0.1
 
 # Async HTTP Client
 aiohttp==3.9.1
 aiofiles==23.2.0
+httpx==0.25.2
 
 # Database
 motor==3.3.2
@@ -21,18 +19,18 @@ python-dotenv==1.0.0
 
 # HTTP Requests
 requests==2.31.0
-
-# URL Parsing
 urllib3==2.1.0
 
-# Date/Time
+# Date/Time and Time Zones
 python-dateutil==2.8.2
+pytz==2023.3
 
 # Logging
 colorlog==6.8.0
 
 # File Handling
 pathlib==1.0.1
+python-magic==0.4.27
 
 # JSON Handling
 ujson==5.8.0
@@ -40,27 +38,16 @@ ujson==5.8.0
 # Progress Bars
 tqdm==4.66.1
 
-# System Information
+# System & Memory Info
 psutil==5.9.6
+pympler==0.9
 
 # Async Support
-asyncio==3.4.3
 asyncio-throttle==1.0.2
-
-# Network
-httpx==0.25.2
+uvloop==0.19.0
 
 # Threading
-concurrent-futures==3.1.1
-
-# Time Zones
-pytz==2023.3
-
-# File Type Detection
-python-magic==0.4.27
-
-# Memory Management
-pympler==0.9
+concurrent-futures==3.1.1  # Only needed for Python <3.4; can be skipped on VPS with Python 3.10+
 
 # Error Handling
 sentry-sdk==1.39.1
@@ -68,11 +55,8 @@ sentry-sdk==1.39.1
 # Configuration
 pydantic==2.5.0
 
-# Security
-cryptography==41.0.7
-
-# Performance
-uvloop==0.19.0
-
 # Monitoring
 prometheus-client==0.19.0
+
+# Security
+cryptography==41.0.7
