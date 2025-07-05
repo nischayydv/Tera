@@ -26,11 +26,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class Config:
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-    API_ID = int(os.getenv("API_ID", "YOUR_API_ID_HERE"))
-    API_HASH = os.getenv("API_HASH", "YOUR_API_HASH_HERE")
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "8037389280:AAG5WfzHcheszs-RHWL8WXszWPkrWjyulp8")
+    API_ID = int(os.getenv("API_ID", "24720215"))
+    API_HASH = os.getenv("API_HASH", "c0d3395590fecba19985f95d6300785e")
     
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+    MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     DB_NAME = "terabox_bot"
     API_BASE_URL = "https://noor-terabox-api.woodmirror.workers.dev/api"
     PROXY_BASE_URL = "https://noor-terabox-api.woodmirror.workers.dev/proxy"
