@@ -1,13 +1,15 @@
 import os
-import asyncio
-import aiohttp
-import aiofiles
-import logging
 import time
 import math
+import asyncio
+import logging
+import aiohttp
+import aiofiles
+
 from datetime import datetime
 from urllib.parse import quote
 
+# Telegram imports
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -19,12 +21,14 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
+# MongoDB (Motor + pymongo)
 from motor.motor_asyncio import AsyncIOMotorClient
 import pymongo
 
+# Pyrogram (for fast upload)
 from pyrogram import Client
 from pyrogram.types import Message as PyroMessage
-from pyrogram.errors import FloodWait, RPCErrorfrom pyrogram.errors import FloodWait, RPCError
+from pyrogram.errors import FloodWait, RPCError
 
 # Configure logging
 logging.basicConfig(
