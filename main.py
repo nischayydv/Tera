@@ -1045,7 +1045,7 @@ async def stats_callback(client, callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔙 Back", callback_data="back")
+                InlineKeyboardButton("🔙 Back", callback_data="back"),
                 InlineKeyboardButton("🔄 Refresh", callback_data="stats")
             ],
             [InlineKeyboardButton("🚀 Performance", callback_data="performance")]
