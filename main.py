@@ -353,7 +353,6 @@ async def handle_url(client, message):
         [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message.id}")],
             InlineKeyboardButton("📋 File Details", callback_data=f"details_{message.id}"),
             InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message.id}")
-        ]
     ])
     
     # Store file info for callback - Fixed message.id
