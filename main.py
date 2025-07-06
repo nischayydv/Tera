@@ -10,8 +10,8 @@ from pyrogram.enums import ChatAction
 import humanize
 import yt_dlp
 import aiohttp
-import subprocess
-import json
+import aiofiles
+from concurrent.futures import ThreadPoolExecutor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,57 +38,15 @@ stats_collection = db.stats
 
 os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
+# Thread pool for blocking operations
+executor = ThreadPoolExecutor(max_workers=4)
+
 # Progress tracking
 download_progress = {}
-
-class ProgressHook:
-    def __init__(self, user_id, message):
-        self.user_id = user_id
-        self.message = message
-        self.last_update = 0
-        self.loop = asyncio.get_event_loop()
-        
-    def __call__(self, d):
-        if d['status'] == 'downloading':
-            current_time = time.time()
-            if current_time - self.last_update > 2:  # Update every 2 seconds
-                try:
-                    downloaded = d.get('downloaded_bytes', 0)
-                    total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-                    speed = d.get('speed', 0) or 0
-                    eta = d.get('eta', 0) or 0
-                    
-                    if total > 0:
-                        progress_bar = get_progress_bar(downloaded, total)
-                        
-                        # Schedule the coroutine properly
-                        if self.loop.is_running():
-                            asyncio.create_task(self.update_progress(
-                                d.get('filename', 'Unknown'),
-                                progress_bar,
-                                downloaded,
-                                total,
-                                speed,
-                                eta
-                            ))
-                        
-                        self.last_update = current_time
-                except Exception as e:
-                    logger.error(f"Progress hook error: {e}")
-    
-    async def update_progress(self, filename, progress_bar, downloaded, total, speed, eta):
-        try:
-            await self.message.edit_text(
-                f"📥 **Downloading:** `{os.path.basename(filename)}`\n\n"
-                f"{progress_bar}\n"
-                f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total)}`\n"
-                f"⚡ **Speed:** `{humanize.naturalsize(speed)}/s`\n"
-                f"⏱️ **ETA:** `{eta}s`"
-            )
-        except Exception as e:
-            logger.error(f"Progress update error: {e}")
+last_edit_time = {}
 
 async def add_user(user_id, username):
+    """Add user to database"""
     user_data = {
         "user_id": user_id,
         "username": username,
@@ -103,11 +61,13 @@ async def add_user(user_id, username):
     )
 
 async def get_user_stats():
+    """Get bot statistics"""
     total_users = await users_collection.count_documents({})
     total_downloads = await stats_collection.count_documents({})
     return total_users, total_downloads
 
 async def update_download_stats(user_id, file_size):
+    """Update download statistics"""
     await users_collection.update_one(
         {"user_id": user_id},
         {"$inc": {"downloads": 1}}
@@ -119,57 +79,133 @@ async def update_download_stats(user_id, file_size):
     })
 
 async def get_terabox_info(url):
+    """Get file info from Terabox API"""
     api_url = f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}"
     
-    async with aiohttp.ClientSession() as session:
-        async with session.get(api_url) as response:
-            if response.status == 200:
-                data = await response.json()
-                if "error" not in data:
-                    return data
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if "error" not in data:
+                        return data
+                    else:
+                        return {"error": data["error"]}
                 else:
-                    return {"error": data["error"]}
-            else:
-                return {"error": "Failed to fetch file info"}
+                    return {"error": "Failed to fetch file info"}
+    except Exception as e:
+        return {"error": str(e)}
 
 def get_progress_bar(current, total, length=20):
+    """Generate progress bar"""
+    if total <= 0:
+        return "░" * length + " 0.0%"
     percent = (current / total) * 100
     filled = int(length * current // total)
     bar = "█" * filled + "░" * (length - filled)
     return f"{bar} {percent:.1f}%"
 
-def download_with_ytdlp(url, output_path, progress_hook=None):
-    """Download using yt-dlp with optimizations"""
-    ydl_opts = {
-        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-        'format': 'best',
-        'no_warnings': True,
-        'extract_flat': False,
-        'writethumbnail': False,
-        'writeinfojson': False,
-        'concurrent_fragment_downloads': 4,
-        'http_chunk_size': 1024*1024,  # 1MB chunks
-        'retries': 3,
-        'fragment_retries': 3,
-        'progress_hooks': [progress_hook] if progress_hook else [],
-    }
-    
+async def safe_edit_message(message, text, reply_markup=None):
+    """Safely edit message with 5-second rate limit"""
     try:
+        current_time = time.time()
+        msg_id = f"{message.chat.id}_{message.id}"
+        
+        if msg_id in last_edit_time:
+            time_diff = current_time - last_edit_time[msg_id]
+            if time_diff < 5:
+                await asyncio.sleep(5 - time_diff)
+        
+        await message.edit_text(text, reply_markup=reply_markup)
+        last_edit_time[msg_id] = time.time()
+    except Exception as e:
+        logger.error(f"Edit message error: {e}")
+
+def download_with_ytdlp_sync(url, output_path, progress_callback=None):
+    """Synchronous yt-dlp download function"""
+    try:
+        # Progress hook for yt-dlp
+        def progress_hook(d):
+            if progress_callback and d['status'] == 'downloading':
+                try:
+                    downloaded = d.get('downloaded_bytes', 0)
+                    total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+                    speed = d.get('speed', 0) or 0
+                    eta = d.get('eta', 0) or 0
+                    filename = d.get('filename', 'Unknown')
+                    
+                    progress_callback(downloaded, total, speed, eta, filename)
+                except:
+                    pass
+        
+        ydl_opts = {
+            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+            'format': 'best',
+            'no_warnings': True,
+            'extract_flat': False,
+            'writethumbnail': False,
+            'writeinfojson': False,
+            'concurrent_fragment_downloads': 4,
+            'http_chunk_size': 1024*1024,
+            'retries': 3,
+            'fragment_retries': 3,
+            'progress_hooks': [progress_hook],
+        }
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Get info first
             info = ydl.extract_info(url, download=False)
-            filename = ydl.prepare_filename(info)
+            if not info:
+                return None, None
             
-            # Download
+            filename = ydl.prepare_filename(info)
             ydl.download([url])
             
             return filename, info
+            
     except Exception as e:
         logger.error(f"yt-dlp error: {e}")
         return None, None
 
+async def download_with_ytdlp(url, output_path, progress_callback=None):
+    """Async wrapper for yt-dlp download"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        executor, 
+        download_with_ytdlp_sync, 
+        url, 
+        output_path, 
+        progress_callback
+    )
+
+async def fallback_download(url, filename, progress_callback=None):
+    """Fallback download method using aiohttp"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    
+                    filepath = os.path.join(DOWNLOAD_PATH, filename)
+                    async with aiofiles.open(filepath, 'wb') as file:
+                        async for chunk in response.content.iter_chunked(1024*1024):
+                            await file.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            if progress_callback:
+                                speed = downloaded / (time.time() - start_time) if 'start_time' in locals() else 0
+                                progress_callback(downloaded, total_size, speed, 0, filename)
+                    
+                    return filepath
+                else:
+                    return None
+    except Exception as e:
+        logger.error(f"Fallback download error: {e}")
+        return None
+
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
+    """Handle /start command"""
     user_id = message.from_user.id
     username = message.from_user.username
     
@@ -188,14 +224,16 @@ async def start_command(client, message):
         "• Ultra-fast downloads with yt-dlp\n"
         "• Real-time progress tracking\n"
         "• Upload as video or document\n"
-        "• Advanced download optimization\n\n"
+        "• Advanced download optimization\n"
+        "• Smart fallback methods\n\n"
         "📤 **Made by:** @NY_BOTS",
         reply_markup=keyboard,
         message_effect_id=5104841245755180586
     )
 
-@app.on_message(filters.text & filters.private)
+@app.on_message(filters.text & filters.private & ~filters.command("start"))
 async def handle_url(client, message):
+    """Handle Terabox URLs"""
     url = message.text.strip()
     
     if not ("terabox" in url.lower() or "1024tera" in url.lower()):
@@ -215,7 +253,7 @@ async def handle_url(client, message):
     file_info = await get_terabox_info(url)
     
     if "error" in file_info:
-        await processing_msg.edit_text(f"❌ **Error:** {file_info['error']}")
+        await safe_edit_message(processing_msg, f"❌ **Error:** {file_info['error']}")
         return
     
     keyboard = InlineKeyboardMarkup([
@@ -223,20 +261,23 @@ async def handle_url(client, message):
         [InlineKeyboardButton("📊 File Info", callback_data=f"info_{url}")]
     ])
     
-    await processing_msg.edit_text(
+    await safe_edit_message(
+        processing_msg,
         f"📁 **File Information:**\n\n"
         f"📄 **Name:** `{file_info['file_name']}`\n"
         f"📊 **Size:** `{file_info['file_size']}`\n"
         f"🖼️ **Type:** `{file_info['file_name'].split('.')[-1].upper()}`\n\n"
         f"✅ **Ready to download with yt-dlp optimization!**",
-        reply_markup=keyboard
+        keyboard
     )
 
 @app.on_callback_query(filters.regex(r"^download_"))
 async def download_callback(client, callback: CallbackQuery):
+    """Handle download callback"""
     url = callback.data.split("download_", 1)[1]
     user_id = callback.from_user.id
     
+    # Get file info
     file_info = await get_terabox_info(url)
     
     if "error" in file_info:
@@ -251,65 +292,67 @@ async def download_callback(client, callback: CallbackQuery):
         "⏳ Please wait..."
     )
     
-    # Create progress hook
-    progress_hook = ProgressHook(user_id, progress_msg)
+    # Progress tracking variables
+    start_time = time.time()
+    last_update = 0
     
-    # Download with yt-dlp
-    filepath, info = await asyncio.get_event_loop().run_in_executor(
-        None, 
-        download_with_ytdlp,
+    def progress_callback(downloaded, total, speed, eta, filename):
+        nonlocal last_update
+        current_time = time.time()
+        
+        if current_time - last_update > 3:  # Update every 3 seconds
+            try:
+                progress_bar = get_progress_bar(downloaded, total)
+                
+                text = (
+                    f"📥 **Downloading:** `{os.path.basename(filename)}`\n\n"
+                    f"{progress_bar}\n"
+                    f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total)}`\n"
+                    f"⚡ **Speed:** `{humanize.naturalsize(speed)}/s`\n"
+                    f"⏱️ **ETA:** `{eta}s`"
+                )
+                
+                # Schedule the message edit
+                asyncio.create_task(safe_edit_message(progress_msg, text))
+                last_update = current_time
+            except:
+                pass
+    
+    # Try yt-dlp first
+    filepath, info = await download_with_ytdlp(
         file_info['proxy_url'], 
         DOWNLOAD_PATH, 
-        progress_hook
+        progress_callback
     )
     
+    # Fallback to direct download if yt-dlp fails
     if not filepath or not os.path.exists(filepath):
-        await progress_msg.edit_text("❌ **Download failed!** Trying alternative method...")
+        await safe_edit_message(
+            progress_msg,
+            "⚠️ **yt-dlp failed, trying direct download...**\n\n"
+            "🔄 Switching to alternative method..."
+        )
         
-        # Fallback to direct download
-        try:
-            import aiofiles
-            
-            await progress_msg.edit_text(
-                "📥 **Downloading with fallback method...**\n\n"
-                "🔄 Using direct HTTP download..."
-            )
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(file_info['proxy_url']) as response:
-                    if response.status == 200:
-                        filepath = os.path.join(DOWNLOAD_PATH, file_info['file_name'])
-                        total_size = int(response.headers.get('content-length', 0))
-                        downloaded = 0
-                        
-                        async with aiofiles.open(filepath, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(1024*1024):
-                                await f.write(chunk)
-                                downloaded += len(chunk)
-                                
-                                # Update progress every 2MB
-                                if downloaded % (2*1024*1024) == 0 and total_size > 0:
-                                    progress_bar = get_progress_bar(downloaded, total_size)
-                                    await progress_msg.edit_text(
-                                        f"📥 **Fallback Download:** `{file_info['file_name']}`\n\n"
-                                        f"{progress_bar}\n"
-                                        f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total_size)}`"
-                                    )
-                    else:
-                        await progress_msg.edit_text("❌ **Download failed completely!**")
-                        return
-        except Exception as e:
-            await progress_msg.edit_text(f"❌ **Download failed:** {str(e)}")
+        filepath = await fallback_download(
+            file_info['proxy_url'], 
+            file_info['file_name'], 
+            progress_callback
+        )
+        
+        if not filepath:
+            await safe_edit_message(progress_msg, "❌ **Download failed completely!**")
             return
     
     # Upload file
-    await progress_msg.edit_text(
+    await safe_edit_message(
+        progress_msg,
         "📤 **Uploading...**\n\n"
         "⏳ Preparing upload..."
     )
     
     await client.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_DOCUMENT)
     
+    # Get user upload preference
     user_data = await users_collection.find_one({"user_id": user_id})
     upload_type = user_data.get("upload_type", "video") if user_data else "video"
     
@@ -317,16 +360,27 @@ async def download_callback(client, callback: CallbackQuery):
     
     async def upload_progress(current, total):
         progress_bar = get_progress_bar(current, total)
-        await progress_msg.edit_text(
+        await safe_edit_message(
+            progress_msg,
             f"📤 **Uploading:** `{os.path.basename(filepath)}`\n\n"
             f"{progress_bar}\n"
             f"📊 **Uploaded:** `{humanize.naturalsize(current)}` / `{humanize.naturalsize(total)}`"
         )
     
     try:
-        caption = f"📁 **File:** `{os.path.basename(filepath)}`\n📊 **Size:** `{humanize.naturalsize(file_size)}`\n\n🚀 **Downloaded with yt-dlp optimization**\n📤 **By:** @NY_BOTS"
+        caption = (
+            f"📁 **File:** `{os.path.basename(filepath)}`\n"
+            f"📊 **Size:** `{humanize.naturalsize(file_size)}`\n"
+            f"🚀 **Method:** yt-dlp + API\n"
+            f"⏱️ **Time:** `{datetime.now().strftime('%H:%M:%S')}`\n\n"
+            f"📤 **Downloaded by:** @NY_BOTS"
+        )
         
-        if upload_type == "video" and filepath.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+        # Determine upload type
+        video_extensions = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv')
+        is_video = filepath.lower().endswith(video_extensions)
+        
+        if upload_type == "video" and is_video:
             await callback.message.reply_video(
                 filepath,
                 caption=caption,
@@ -354,25 +408,27 @@ async def download_callback(client, callback: CallbackQuery):
                 f"🆔 **ID:** `{user_id}`\n"
                 f"📁 **File:** `{os.path.basename(filepath)}`\n"
                 f"📊 **Size:** `{humanize.naturalsize(file_size)}`\n"
-                f"🚀 **Method:** yt-dlp + API\n"
+                f"🚀 **Method:** yt-dlp + Fallback\n"
                 f"🕐 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Log channel error: {e}")
         
     except Exception as e:
         logger.error(f"Upload error: {e}")
-        await progress_msg.edit_text(f"❌ **Upload failed:** {str(e)}")
+        await safe_edit_message(progress_msg, f"❌ **Upload failed:** {str(e)}")
     
     finally:
         # Clean up
         try:
-            os.remove(filepath)
-        except:
-            pass
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
 
 @app.on_callback_query(filters.regex(r"^info_"))
 async def info_callback(client, callback: CallbackQuery):
+    """Handle info callback"""
     url = callback.data.split("info_", 1)[1]
     
     file_info = await get_terabox_info(url)
@@ -386,9 +442,10 @@ async def info_callback(client, callback: CallbackQuery):
         f"📄 **Name:** `{file_info['file_name']}`\n"
         f"📊 **Size:** `{file_info['file_size']}`\n"
         f"📦 **Size (bytes):** `{file_info['size_bytes']:,}`\n"
-        f"🚀 **Download Method:** yt-dlp + API\n"
+        f"🚀 **Download Method:** yt-dlp + Direct\n"
         f"⚡ **Optimization:** Multi-threaded\n"
-        f"🔗 **API Response:** Valid\n\n"
+        f"🔗 **API Status:** ✅ Valid\n"
+        f"🖼️ **Thumbnail:** {'✅ Available' if file_info.get('thumbnail') else '❌ Not Available'}\n\n"
         f"✅ **Ready for ultra-fast download!**"
     )
     
@@ -401,15 +458,18 @@ async def info_callback(client, callback: CallbackQuery):
 
 @app.on_callback_query(filters.regex("^stats$"))
 async def stats_callback(client, callback: CallbackQuery):
+    """Handle stats callback"""
     total_users, total_downloads = await get_user_stats()
     
     await callback.message.edit_text(
         f"📊 **Bot Statistics:**\n\n"
         f"👥 **Total Users:** `{total_users:,}`\n"
         f"📥 **Total Downloads:** `{total_downloads:,}`\n"
-        f"🚀 **Download Engine:** yt-dlp\n"
+        f"🚀 **Download Engine:** yt-dlp + Direct\n"
         f"⚡ **Optimization:** Multi-threaded\n"
-        f"🤖 **Status:** `Online & Fast`\n\n"
+        f"💾 **Storage:** MongoDB\n"
+        f"🤖 **Status:** `Online & Fast`\n"
+        f"📡 **Uptime:** `24/7`\n\n"
         f"📤 **Made by:** @NY_BOTS",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="back")]
@@ -418,6 +478,7 @@ async def stats_callback(client, callback: CallbackQuery):
 
 @app.on_callback_query(filters.regex("^settings$"))
 async def settings_callback(client, callback: CallbackQuery):
+    """Handle settings callback"""
     user_id = callback.from_user.id
     user_data = await users_collection.find_one({"user_id": user_id})
     upload_type = user_data.get("upload_type", "video") if user_data else "video"
@@ -431,14 +492,16 @@ async def settings_callback(client, callback: CallbackQuery):
     await callback.message.edit_text(
         f"⚙️ **Settings:**\n\n"
         f"📤 **Upload Type:** `{upload_type.title()}`\n"
-        f"🚀 **Download Engine:** yt-dlp\n"
-        f"⚡ **Optimization:** Enabled\n\n"
+        f"🚀 **Download Engine:** yt-dlp + Direct\n"
+        f"⚡ **Optimization:** Enabled\n"
+        f"📊 **Progress Updates:** Every 3 seconds\n\n"
         f"Choose how you want files to be uploaded:",
         reply_markup=keyboard
     )
 
 @app.on_callback_query(filters.regex(r"^set_(video|document)$"))
 async def set_upload_type(client, callback: CallbackQuery):
+    """Handle upload type setting"""
     upload_type = callback.data.split("set_")[1]
     user_id = callback.from_user.id
     
@@ -453,6 +516,7 @@ async def set_upload_type(client, callback: CallbackQuery):
 
 @app.on_callback_query(filters.regex("^help$"))
 async def help_callback(client, callback: CallbackQuery):
+    """Handle help callback"""
     await callback.message.edit_text(
         f"ℹ️ **Help & Instructions:**\n\n"
         f"🔗 **How to use:**\n"
@@ -465,10 +529,16 @@ async def help_callback(client, callback: CallbackQuery):
         f"• Multi-threaded optimization\n"
         f"• Real-time progress tracking\n"
         f"• Automatic fallback methods\n"
-        f"• Smart upload type detection\n\n"
+        f"• Smart upload type detection\n"
+        f"• 5-second rate limit protection\n\n"
         f"⚙️ **Settings:**\n"
         f"• Video/Document upload mode\n"
-        f"• Download statistics\n\n"
+        f"• Download statistics tracking\n\n"
+        f"🛠️ **Technical:**\n"
+        f"• Rate limiting: 5 seconds\n"
+        f"• Chunk size: 1MB\n"
+        f"• Concurrent downloads: 4\n"
+        f"• Auto retry: 3 attempts\n\n"
         f"📤 **Made by:** @NY_BOTS",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="back")]
@@ -477,8 +547,10 @@ async def help_callback(client, callback: CallbackQuery):
 
 @app.on_callback_query(filters.regex("^back$"))
 async def back_callback(client, callback: CallbackQuery):
+    """Handle back callback"""
     await start_command(client, callback.message)
 
 if __name__ == "__main__":
     print("🚀 Starting Terabox Download Bot with yt-dlp...")
+    print("📤 Made by: @NY_BOTS")
     app.run()
