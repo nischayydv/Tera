@@ -507,24 +507,53 @@ async def get_terabox_info(url):
 # Database functions with optimization
 async def add_user(user_id, username):
     """Add user to database with enhanced data"""
-    user_data = {
-        "user_id": user_id,
-        "username": username,
-        "join_date": datetime.now(),
-        "downloads": 0,
-        "total_downloaded": 0,
-        "upload_type": "video",
-        "last_active": datetime.now(),
-        "premium": False
-    }
-    await users_collection.update_one(
-        {"user_id": user_id}, 
-        {
-            "$setOnInsert": user_data,
-            "$set": {"last_active": datetime.now()}
-        }, 
-        upsert=True
-    )
+    try:
+        # Check if user exists first
+        existing_user = await users_collection.find_one({"user_id": user_id})
+        
+        if existing_user:
+            # User exists, just update last_active
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_active": datetime.now()}}
+            )
+        else:
+            # New user, insert with all data
+            user_data = {
+                "user_id": user_id,
+                "username": username,
+                "join_date": datetime.now(),
+                "downloads": 0,
+                "total_downloaded": 0,
+                "upload_type": "video",
+                "last_active": datetime.now(),
+                "premium": False
+            }
+            await users_collection.insert_one(user_data)
+            
+    except Exception as e:
+        logger.error(f"Add user error: {e}")
+        # Fallback: try simple upsert without conflict
+        try:
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {
+                    "$setOnInsert": {
+                        "user_id": user_id,
+                        "username": username,
+                        "join_date": datetime.now(),
+                        "downloads": 0,
+                        "total_downloaded": 0,
+                        "upload_type": "video",
+                        "premium": False
+                    },
+                    "$currentDate": {"last_active": True}  # Use $currentDate instead
+                },
+                upsert=True
+            )
+        except Exception as e2:
+            logger.error(f"Fallback add user error: {e2}")
+
 
 async def update_download_stats(user_id, file_size, filename, download_time):
     """Enhanced stats tracking"""
