@@ -306,6 +306,22 @@ async def stats_command(client, message):
     
     await message.reply_text(stats_text)
 
+async def safe_edit_message(message, text, reply_markup=None):
+    """Safely edit message to avoid MessageNotModified error"""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except Exception as e:
+        if "MESSAGE_NOT_MODIFIED" in str(e):
+            # Message content is the same, just ignore
+            pass
+        else:
+            logger.error(f"Message edit error: {e}")
+            # Try to send a new message if edit fails
+            try:
+                await message.reply_text(text, reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"Failed to send new message: {e2}")
+
 @app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "stats"]))
 async def handle_url(client, message):
     """Handle Terabox URL"""
@@ -348,14 +364,16 @@ async def handle_url(client, message):
     size_bytes = file_info.get('size_bytes', 0)
     file_type = get_file_type(filename)
     
-    # Create download keyboard - Fixed message.id instead of message.message_id
+    # Create download keyboard
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message.id}")],
+        [
             InlineKeyboardButton("📋 File Details", callback_data=f"details_{message.id}"),
             InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message.id}")
+        ]
     ])
     
-    # Store file info for callback - Fixed message.id
+    # Store file info for callback
     download_progress[message.id] = {
         'url': url,
         'file_info': file_info,
@@ -372,6 +390,8 @@ async def handle_url(client, message):
     )
     
     await safe_edit_message(processing_msg, info_text, keyboard)
+
+# Ensure all other parts of the code that use safe_edit_message are also corrected similarly
 
 @app.on_callback_query(filters.regex(r"^download_"))
 async def download_callback(client, callback: CallbackQuery):
