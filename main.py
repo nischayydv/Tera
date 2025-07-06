@@ -483,9 +483,7 @@ async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
 async def get_terabox_info(url):
     """Enhanced API call with multiple endpoints"""
     api_endpoints = [
-        f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}",
-        f"https://terabox-api-two.vercel.app/api?url={url}",
-        f"https://terabox-dl.qtcloud.workers.dev/api?url={url}"
+        f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}"
     ]
     
     for api_url in api_endpoints:
