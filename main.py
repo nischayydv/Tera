@@ -177,7 +177,7 @@ def get_system_info():
     return {}
 
 async def download_file_ultra_fast(url, filename, user_id, progress_message):
-    """Ultra-fast download with advanced optimization"""
+    """Ultra-fast download with fixed timeout configuration"""
     global active_downloads
     
     if active_downloads >= MAX_CONCURRENT_DOWNLOADS:
@@ -190,7 +190,7 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
     progress_tracker = ProgressTracker()
     
     try:
-        # Optimized connector settings
+        # Fixed connector settings
         connector = aiohttp.TCPConnector(
             limit=200,
             limit_per_host=50,
@@ -198,11 +198,10 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
             use_dns_cache=True,
             enable_cleanup_closed=True,
             keepalive_timeout=30,
-            force_close=False,
-            ssl=False  # Disable SSL verification for speed
+            force_close=False
         )
         
-        # Optimized timeout settings
+        # Fixed timeout settings - removed conflict
         timeout = aiohttp.ClientTimeout(
             total=None,
             connect=10,
@@ -210,11 +209,10 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
             sock_connect=10
         )
         
+        # Fixed session creation - removed conflicting parameters
         async with aiohttp.ClientSession(
             connector=connector, 
-            timeout=timeout,
-            read_timeout=30,
-            conn_timeout=10
+            timeout=timeout
         ) as session:
             
             headers = {
@@ -290,6 +288,7 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
         return None
     finally:
         active_downloads -= 1
+
 
 async def upload_with_progress(client, chat_id, filepath, caption, file_type, progress_message):
     """Upload file with optimized progress tracking"""
@@ -411,34 +410,43 @@ def get_progress_bar(current, total, length=20):
     return f"{bar} {percent:.1f}%"
 
 def get_file_type(filename):
-    """Enhanced file type detection using filetype library"""
+    """Enhanced file type detection using extension only"""
     try:
-        # First try filetype library for accurate detection
-        kind = filetype.guess(filename)
-        if kind:
-            if kind.mime.startswith('video/'):
-                return "video"
-            elif kind.mime.startswith('audio/'):
-                return "audio"
-            elif kind.mime.startswith('image/'):
-                return "image"
+        # Don't use filetype.guess() on filename, only on actual files
+        # Use extension-based detection for filenames
+        ext = filename.lower().split('.')[-1] if '.' in filename else ''
+        video_exts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'ts']
+        audio_exts = ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'wma', 'opus']
+        image_exts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg']
+        
+        if ext in video_exts:
+            return "video"
+        elif ext in audio_exts:
+            return "audio"
+        elif ext in image_exts:
+            return "image"
+        else:
+            return "document"
+    except Exception as e:
+        logger.error(f"File type detection error: {e}")
+        return "document"
+
+def get_file_type_from_path(filepath):
+    """Use filetype library for actual files"""
+    try:
+        if os.path.exists(filepath):
+            kind = filetype.guess(filepath)
+            if kind:
+                if kind.mime.startswith('video/'):
+                    return "video"
+                elif kind.mime.startswith('audio/'):
+                    return "audio"
+                elif kind.mime.startswith('image/'):
+                    return "image"
+        return get_file_type(os.path.basename(filepath))
     except Exception as e:
         logger.error(f"Filetype detection error: {e}")
-    
-    # Fallback to extension-based detection
-    ext = filename.lower().split('.')[-1] if '.' in filename else ''
-    video_exts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'ts']
-    audio_exts = ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'wma', 'opus']
-    image_exts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg']
-    
-    if ext in video_exts:
-        return "video"
-    elif ext in audio_exts:
-        return "audio"
-    elif ext in image_exts:
-        return "image"
-    else:
-        return "document"
+        return get_file_type(os.path.basename(filepath))
 
 async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
     """Enhanced safe message editing with retry logic"""
@@ -481,26 +489,24 @@ async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
     return False
 
 async def get_terabox_info(url):
-    """Enhanced API call with multiple endpoints"""
-    api_endpoints = [
-        f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}"
-    ]
+    """Get file info from Noor API only"""
+    api_url = f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}"
     
-    for api_url in api_endpoints:
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.get(api_url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if "error" not in data and "proxy_url" in data:
-                            return data
-                        else:
-                            continue
-        except Exception as e:
-            logger.error(f"API request error for {api_url}: {e}")
-            continue
-    
-    return {"error": "All API endpoints failed"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if "error" not in data and "proxy_url" in data:
+                        return data
+                    else:
+                        return {"error": data.get("error", "Invalid response from API")}
+                else:
+                    return {"error": f"API request failed with status {response.status}"}
+    except Exception as e:
+        logger.error(f"API request error: {e}")
+        return {"error": f"Network error: {str(e)}"}
+
 
 # Database functions with optimization
 async def add_user(user_id, username):
@@ -1636,14 +1642,37 @@ async def cleanup_on_shutdown():
     logger.info("🛑 Enhanced bot shutting down...")
     
     # Clean up temporary files
+    # In download_callback function - Line ~600-700
+finally:
+    # Fixed cleanup
+    try:
+        if 'filepath' in locals() and filepath and os.path.exists(filepath):
+            os.remove(filepath)
+        if message_id in download_progress:
+            download_progress[message_id]['downloading'] = False
+            # Remove old entries (older than 1 hour)
+            current_time = time.time()
+            if current_time - download_progress[message_id].get('created_at', 0) > 3600:
+                del download_progress[message_id]
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+
+# Also fix cleanup_on_shutdown function - Line ~1200
+async def cleanup_on_shutdown():
+    """Enhanced cleanup when bot shuts down"""
+    logger.info("🛑 Enhanced bot shutting down...")
+    
+    # Clean up temporary files
     try:
         if os.path.exists(DOWNLOAD_PATH):
             for filename in os.listdir(DOWNLOAD_PATH):
-                filepath = os.path.join(DOWNLOAD_PATH, filename)
-                try:
-                    os.remove(filepath)
-                except Exception as e:
-                    logger.error(f"Error removing file {filepath}: {e}")
+                if filename:  # Check if filename is not None or empty
+                    filepath = os.path.join(DOWNLOAD_PATH, filename)
+                    try:
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                    except Exception as e:
+                        logger.error(f"Error removing file {filepath}: {e}")
     except Exception as e:
         logger.error(f"File cleanup error: {e}")
     
@@ -1651,9 +1680,10 @@ async def cleanup_on_shutdown():
     download_progress.clear()
     upload_progress.clear()
     
-    # Close database connections
+    # Close database connections properly
     try:
-        mongo_client.close()
+        if mongo_client:
+            mongo_client.close()
     except Exception as e:
         logger.error(f"Database cleanup error: {e}")
     
