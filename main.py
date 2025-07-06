@@ -4,7 +4,7 @@ import aiofiles
 import os
 import time
 import logging
-import requests  # Added requests import
+import requests
 from datetime import datetime
 from urllib.parse import urlparse
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -102,23 +102,21 @@ async def get_terabox_info(url):
         logger.error(f"API request error: {e}")
         return {"error": f"Network error: {str(e)}"}
 
-def get_terabox_info_sync(url):
-    """Synchronous version using requests for fallback"""
-    api_url = f"https://noor-terabox-api.woodmirror.workers.dev/api?url={url}"
-    
+async def safe_edit_message(message, text, reply_markup=None):
+    """Safely edit message to avoid MessageNotModified error"""
     try:
-        response = requests.get(api_url, timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            if "error" not in data and "proxy_url" in data:
-                return data
-            else:
-                return {"error": data.get("error", "Invalid response from API")}
-        else:
-            return {"error": f"API request failed with status {response.status_code}"}
+        await message.edit_text(text, reply_markup=reply_markup)
     except Exception as e:
-        logger.error(f"Sync API request error: {e}")
-        return {"error": f"Network error: {str(e)}"}
+        if "MESSAGE_NOT_MODIFIED" in str(e):
+            # Message content is the same, just ignore
+            pass
+        else:
+            logger.error(f"Message edit error: {e}")
+            # Try to send a new message if edit fails
+            try:
+                await message.reply_text(text, reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"Failed to send new message: {e2}")
 
 async def download_file_optimized(url, filename, user_id, progress_message):
     """Download file with optimized speed and progress tracking"""
@@ -154,6 +152,7 @@ async def download_file_optimized(url, filename, user_id, progress_message):
                 downloaded = 0
                 start_time = time.time()
                 last_update = 0
+                last_text = ""
                 
                 async with aiofiles.open(filepath, 'wb') as file:
                     async for chunk in response.content.iter_chunked(CHUNK_SIZE):
@@ -171,7 +170,7 @@ async def download_file_optimized(url, filename, user_id, progress_message):
                                 progress_bar = get_progress_bar(downloaded, total_size)
                                 
                                 progress_text = (
-                                    f"📥 **Downloading:** `{filename}`\n\n"
+                                    f"📥 **Downloading:** `{filename[:30]}...`\n\n"
                                     f"{progress_bar}\n"
                                     f"📊 **Progress:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total_size)}`\n"
                                     f"⚡ **Speed:** `{humanize.naturalsize(speed)}/s`\n"
@@ -179,8 +178,11 @@ async def download_file_optimized(url, filename, user_id, progress_message):
                                     f"🔄 **Status:** `Downloading...`"
                                 )
                                 
-                                await progress_message.edit_text(progress_text)
-                                last_update = current_time
+                                # Only update if text changed
+                                if progress_text != last_text:
+                                    await safe_edit_message(progress_message, progress_text)
+                                    last_text = progress_text
+                                    last_update = current_time
                             except Exception as e:
                                 logger.error(f"Progress update error: {e}")
                 
@@ -188,32 +190,6 @@ async def download_file_optimized(url, filename, user_id, progress_message):
                 
     except Exception as e:
         logger.error(f"Download error: {e}")
-        return None
-
-def download_file_sync(url, filename):
-    """Synchronous download using requests as fallback"""
-    filepath = os.path.join(DOWNLOAD_PATH, filename)
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Connection': 'keep-alive',
-        }
-        
-        response = requests.get(url, headers=headers, stream=True, timeout=30)
-        if response.status_code == 200:
-            with open(filepath, 'wb') as file:
-                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                    if chunk:
-                        file.write(chunk)
-            return filepath
-        else:
-            return None
-            
-    except Exception as e:
-        logger.error(f"Sync download error: {e}")
         return None
 
 def get_progress_bar(current, total, length=20):
@@ -251,10 +227,14 @@ async def start_command(client, message):
     await add_user(user_id, username)
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="stats"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-        [InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-         InlineKeyboardButton("🔄 Refresh", callback_data="refresh")]
+        [
+            InlineKeyboardButton("📊 Stats", callback_data="stats"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+        ],
+        [
+            InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh")
+        ]
     ])
     
     welcome_text = (
@@ -270,11 +250,14 @@ async def start_command(client, message):
         "📤 **Credits:** @NY_BOTS"
     )
     
-    await message.reply_text(
-        welcome_text,
-        reply_markup=keyboard,
-        message_effect_id=5104841245755180586
-    )
+    try:
+        await message.reply_text(
+            welcome_text,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        logger.error(f"Start command error: {e}")
+        await message.reply_text(welcome_text)
 
 @app.on_message(filters.command("help"))
 async def help_command(client, message):
@@ -333,8 +316,7 @@ async def handle_url(client, message):
         await message.reply_text(
             "❌ **Invalid URL!**\n\n"
             "Please send a valid Terabox URL.\n"
-            "Example: `https://terabox.com/s/xxxxx`",
-            message_effect_id=5104841245755180586
+            "Example: `https://terabox.com/s/xxxxx`"
         )
         return
     
@@ -345,15 +327,15 @@ async def handle_url(client, message):
     processing_msg = await message.reply_text(
         "🔍 **Processing Request...**\n\n"
         "⏳ Fetching file information from Terabox...\n"
-        "🔄 Please wait...",
-        message_effect_id=5104841245755180586
+        "🔄 Please wait..."
     )
     
     # Get file info from API
     file_info = await get_terabox_info(url)
     
     if "error" in file_info:
-        await processing_msg.edit_text(
+        await safe_edit_message(
+            processing_msg,
             f"❌ **Error Occurred!**\n\n"
             f"**Details:** {file_info['error']}\n\n"
             f"🔄 Please try again or check your URL."
@@ -366,15 +348,16 @@ async def handle_url(client, message):
     size_bytes = file_info.get('size_bytes', 0)
     file_type = get_file_type(filename)
     
-    # Create download keyboard
+    # Create download keyboard - Fixed message.id instead of message.message_id
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message.message_id}")],
-        [InlineKeyboardButton("📋 File Details", callback_data=f"details_{message.message_id}"),
-         InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message.message_id}")]
+        [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message.id}")],
+            InlineKeyboardButton("📋 File Details", callback_data=f"details_{message.id}"),
+            InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message.id}")
+        ]
     ])
     
-    # Store file info for callback
-    download_progress[message.message_id] = {
+    # Store file info for callback - Fixed message.id
+    download_progress[message.id] = {
         'url': url,
         'file_info': file_info,
         'user_id': user_id
@@ -382,14 +365,14 @@ async def handle_url(client, message):
     
     info_text = (
         f"📁 **File Ready for Download!**\n\n"
-        f"📄 **Name:** `{filename}`\n"
+        f"📄 **Name:** `{filename[:50]}{'...' if len(filename) > 50 else ''}`\n"
         f"📊 **Size:** `{file_size}` ({humanize.naturalsize(size_bytes)})\n"
         f"🎭 **Type:** `{file_type.upper()}`\n"
         f"✅ **Status:** `Ready`\n\n"
         f"🚀 **Click Download to start!**"
     )
     
-    await processing_msg.edit_text(info_text, reply_markup=keyboard)
+    await safe_edit_message(processing_msg, info_text, keyboard)
 
 @app.on_callback_query(filters.regex(r"^download_"))
 async def download_callback(client, callback: CallbackQuery):
@@ -408,7 +391,8 @@ async def download_callback(client, callback: CallbackQuery):
         await callback.answer("🚀 Starting download...")
         
         # Update message to show download starting
-        progress_msg = await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             "📥 **Initializing Download...**\n\n"
             "🔄 Preparing high-speed download...\n"
             "⚡ Optimizing connection...\n"
@@ -421,11 +405,12 @@ async def download_callback(client, callback: CallbackQuery):
             file_info['proxy_url'], 
             filename, 
             user_id, 
-            progress_msg
+            callback.message
         )
         
         if not filepath or not os.path.exists(filepath):
-            await progress_msg.edit_text(
+            await safe_edit_message(
+                callback.message,
                 "❌ **Download Failed!**\n\n"
                 "Possible reasons:\n"
                 "• Network connection issue\n"
@@ -436,7 +421,8 @@ async def download_callback(client, callback: CallbackQuery):
             return
         
         # Start upload
-        await progress_msg.edit_text(
+        await safe_edit_message(
+            callback.message,
             "📤 **Preparing Upload...**\n\n"
             "⏳ Initializing upload process...\n"
             "🔄 Please wait..."
@@ -453,18 +439,25 @@ async def download_callback(client, callback: CallbackQuery):
         file_type = get_file_type(filename)
         
         # Upload progress callback
+        last_progress_text = ""
         async def upload_progress_callback(current, total):
+            nonlocal last_progress_text
             try:
                 progress_bar = get_progress_bar(current, total)
                 percent = (current / total) * 100
                 
-                await progress_msg.edit_text(
-                    f"📤 **Uploading:** `{filename}`\n\n"
+                progress_text = (
+                    f"📤 **Uploading:** `{filename[:30]}...`\n\n"
                     f"{progress_bar}\n"
                     f"📊 **Progress:** `{humanize.naturalsize(current)}` / `{humanize.naturalsize(total)}`\n"
                     f"📈 **Percent:** `{percent:.1f}%`\n"
                     f"🔄 **Status:** `Uploading...`"
                 )
+                
+                # Only update if text changed
+                if progress_text != last_progress_text:
+                    await safe_edit_message(callback.message, progress_text)
+                    last_progress_text = progress_text
             except Exception as e:
                 logger.error(f"Upload progress error: {e}")
         
@@ -485,17 +478,13 @@ async def download_callback(client, callback: CallbackQuery):
                     filepath,
                     caption=caption,
                     progress=upload_progress_callback,
-                    supports_streaming=True,
-                    duration=0,
-                    width=0,
-                    height=0
+                    supports_streaming=True
                 )
             elif file_type == "audio":
                 await callback.message.reply_audio(
                     filepath,
                     caption=caption,
-                    progress=upload_progress_callback,
-                    duration=0
+                    progress=upload_progress_callback
                 )
             elif file_type == "image":
                 await callback.message.reply_photo(
@@ -511,9 +500,10 @@ async def download_callback(client, callback: CallbackQuery):
                 )
             
             # Success message
-            await progress_msg.edit_text(
+            await safe_edit_message(
+                callback.message,
                 "✅ **Upload Completed Successfully!**\n\n"
-                f"📁 **File:** `{filename}`\n"
+                f"📁 **File:** `{filename[:30]}...`\n"
                 f"📊 **Size:** `{humanize.naturalsize(file_size)}`\n"
                 f"🎉 **Status:** `Completed`\n\n"
                 f"Thank you for using our service!"
@@ -540,9 +530,10 @@ async def download_callback(client, callback: CallbackQuery):
         
         except Exception as e:
             logger.error(f"Upload error: {e}")
-            await progress_msg.edit_text(
+            await safe_edit_message(
+                callback.message,
                 f"❌ **Upload Failed!**\n\n"
-                f"**Error:** {str(e)}\n\n"
+                f"**Error:** {str(e)[:100]}...\n\n"
                 f"The file was downloaded but upload failed.\n"
                 f"Please try again or contact support."
             )
@@ -550,7 +541,8 @@ async def download_callback(client, callback: CallbackQuery):
         finally:
             # Cleanup
             try:
-                os.remove(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
                 if message_id in download_progress:
                     del download_progress[message_id]
             except Exception as e:
@@ -589,7 +581,7 @@ async def details_callback(client, callback: CallbackQuery):
             [InlineKeyboardButton("🔙 Back", callback_data=f"back_{message_id}")]
         ])
         
-        await callback.message.edit_text(details_text, reply_markup=keyboard)
+        await safe_edit_message(callback.message, details_text, keyboard)
         await callback.answer()
         
     except Exception as e:
@@ -612,7 +604,8 @@ async def refresh_callback(client, callback: CallbackQuery):
         url = data['url']
         
         # Update message to show refreshing
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             "🔄 **Refreshing File Info...**\n\n"
             "⏳ Fetching latest information...\n"
             "🔄 Please wait..."
@@ -622,7 +615,8 @@ async def refresh_callback(client, callback: CallbackQuery):
         file_info = await get_terabox_info(url)
         
         if "error" in file_info:
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback.message,
                 f"❌ **Refresh Failed!**\n\n"
                 f"**Error:** {file_info['error']}\n\n"
                 f"🔄 Please try again later."
@@ -640,13 +634,15 @@ async def refresh_callback(client, callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message_id}")],
-            [InlineKeyboardButton("📋 File Details", callback_data=f"details_{message_id}"),
-             InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message_id}")]
+            [
+                InlineKeyboardButton("📋 File Details", callback_data=f"details_{message_id}"),
+                InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message_id}")
+            ]
         ])
         
         info_text = (
             f"📁 **File Info Refreshed!**\n\n"
-            f"📄 **Name:** `{filename}`\n"
+            f"📄 **Name:** `{filename[:50]}{'...' if len(filename) > 50 else ''}`\n"
             f"📊 **Size:** `{file_size}` ({humanize.naturalsize(size_bytes)})\n"
             f"🎭 **Type:** `{file_type.upper()}`\n"
             f"✅ **Status:** `Ready`\n"
@@ -654,7 +650,7 @@ async def refresh_callback(client, callback: CallbackQuery):
             f"🚀 **Click Download to start!**"
         )
         
-        await callback.message.edit_text(info_text, reply_markup=keyboard)
+        await safe_edit_message(callback.message, info_text, keyboard)
         
     except Exception as e:
         logger.error(f"Refresh callback error: {e}")
@@ -678,13 +674,14 @@ async def stats_callback(client, callback: CallbackQuery):
         f"📤 **Made by:** @NY_BOTS"
     )
     
-    await callback.message.edit_text(
-        stats_text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="back"),
-             InlineKeyboardButton("🔄 Refresh", callback_data="stats")]
-        ])
-    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="back"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="stats")
+        ]
+    ])
+    
+    await safe_edit_message(callback.message, stats_text, keyboard)
 
 @app.on_callback_query(filters.regex("^settings$"))
 async def settings_callback(client, callback: CallbackQuery):
@@ -700,7 +697,8 @@ async def settings_callback(client, callback: CallbackQuery):
         upload_type = "video"
         user_downloads = 0
         total_downloaded = 0
-        keyboard = InlineKeyboardMarkup([
+    
+    keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📹 Video {'✅' if upload_type == 'video' else '❌'}", callback_data="set_video")],
         [InlineKeyboardButton(f"📄 Document {'✅' if upload_type == 'document' else '❌'}", callback_data="set_document")],
         [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
@@ -718,7 +716,7 @@ async def settings_callback(client, callback: CallbackQuery):
         f"💡 **Tip:** Video mode supports streaming!"
     )
     
-    await callback.message.edit_text(settings_text, reply_markup=keyboard)
+    await safe_edit_message(callback.message, settings_text, keyboard)
 
 @app.on_callback_query(filters.regex("^set_video$"))
 async def set_video_callback(client, callback: CallbackQuery):
@@ -807,7 +805,7 @@ async def my_stats_callback(client, callback: CallbackQuery):
         [InlineKeyboardButton("🏠 Main Menu", callback_data="back")]
     ])
     
-    await callback.message.edit_text(stats_text, reply_markup=keyboard)
+    await safe_edit_message(callback.message, stats_text, keyboard)
 
 @app.on_callback_query(filters.regex("^help$"))
 async def help_callback(client, callback: CallbackQuery):
@@ -840,16 +838,20 @@ async def help_callback(client, callback: CallbackQuery):
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="back")]
     ])
     
-    await callback.message.edit_text(help_text, reply_markup=keyboard)
+    await safe_edit_message(callback.message, help_text, keyboard)
 
 @app.on_callback_query(filters.regex("^back$"))
 async def back_callback(client, callback: CallbackQuery):
     """Go back to main menu"""
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="stats"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-        [InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-         InlineKeyboardButton("🔄 Refresh", callback_data="refresh")]
+        [
+            InlineKeyboardButton("📊 Stats", callback_data="stats"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+        ],
+        [
+            InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh")
+        ]
     ])
     
     welcome_text = (
@@ -865,7 +867,7 @@ async def back_callback(client, callback: CallbackQuery):
         "📤 **Credits:** @NY_BOTS"
     )
     
-    await callback.message.edit_text(welcome_text, reply_markup=keyboard)
+    await safe_edit_message(callback.message, welcome_text, keyboard)
 
 @app.on_callback_query(filters.regex(r"^back_"))
 async def back_to_file_callback(client, callback: CallbackQuery):
@@ -887,20 +889,22 @@ async def back_to_file_callback(client, callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("📥 Download Now", callback_data=f"download_{message_id}")],
-            [InlineKeyboardButton("📋 File Details", callback_data=f"details_{message_id}"),
-             InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message_id}")]
+            [
+                InlineKeyboardButton("📋 File Details", callback_data=f"details_{message_id}"),
+                InlineKeyboardButton("🔄 Refresh Info", callback_data=f"refresh_{message_id}")
+            ]
         ])
         
         info_text = (
             f"📁 **File Ready for Download!**\n\n"
-            f"📄 **Name:** `{filename}`\n"
+            f"📄 **Name:** `{filename[:50]}{'...' if len(filename) > 50 else ''}`\n"
             f"📊 **Size:** `{file_size}` ({humanize.naturalsize(size_bytes)})\n"
             f"🎭 **Type:** `{file_type.upper()}`\n"
             f"✅ **Status:** `Ready`\n\n"
             f"🚀 **Click Download to start!**"
         )
         
-        await callback.message.edit_text(info_text, reply_markup=keyboard)
+        await safe_edit_message(callback.message, info_text, keyboard)
         await callback.answer()
         
     except Exception as e:
@@ -913,7 +917,7 @@ async def refresh_main_callback(client, callback: CallbackQuery):
     await callback.answer("🔄 Refreshed!")
     await back_callback(client, callback)
 
-# Error handler
+# Error handler for other messages
 @app.on_message(filters.all & filters.private)
 async def handle_other_messages(client, message):
     """Handle other messages"""
@@ -928,7 +932,7 @@ async def handle_other_messages(client, message):
             )
 
 # Admin commands (optional)
-ADMIN_IDS = [123456789]  # Add admin user IDs
+ADMIN_IDS = [123456789]  # Add admin user IDs here
 
 @app.on_message(filters.command("broadcast") & filters.user(ADMIN_IDS))
 async def broadcast_command(client, message):
@@ -957,14 +961,16 @@ async def broadcast_command(client, message):
         
         # Update status every 50 users
         if (success + failed) % 50 == 0:
-            await status_msg.edit_text(
+            await safe_edit_message(
+                status_msg,
                 f"📢 **Broadcasting...**\n\n"
                 f"✅ **Success:** {success}\n"
                 f"❌ **Failed:** {failed}\n"
                 f"⏳ **Remaining:** {len(users) - success - failed}"
             )
     
-    await status_msg.edit_text(
+    await safe_edit_message(
+        status_msg,
         f"📢 **Broadcast Completed!**\n\n"
         f"✅ **Success:** {success}\n"
         f"❌ **Failed:** {failed}\n"
@@ -998,10 +1004,209 @@ async def users_command(client, message):
     
     await message.reply_text(admin_stats)
 
-# Start the bot
-if __name__ == "__main__":
-    logger.info("🚀 Starting Terabox Download Bot...")
+@app.on_message(filters.command("logs") & filters.user(ADMIN_IDS))
+async def logs_command(client, message):
+    """Show recent logs (Admin only)"""
     try:
-        app.run()
+        # Get recent downloads
+        recent_downloads = await stats_collection.find({}).sort("download_date", -1).limit(10).to_list(10)
+        
+        logs_text = "📋 **Recent Downloads:**\n\n"
+        
+        for i, download in enumerate(recent_downloads, 1):
+            filename = download.get('filename', 'Unknown')[:30]
+            size = humanize.naturalsize(download.get('file_size', 0))
+            date = download.get('download_date', datetime.now()).strftime('%m-%d %H:%M')
+            user_id = download.get('user_id', 'Unknown')
+            
+            logs_text += f"`{i}.` {filename}... ({size})\n"
+            logs_text += f"    👤 User: {user_id} | 📅 {date}\n\n"
+        
+        if not recent_downloads:
+            logs_text += "No downloads found."
+        
+        await message.reply_text(logs_text)
+        
     except Exception as e:
-        logger.error(f"Bot startup error: {e}")
+        logger.error(f"Logs command error: {e}")
+        await message.reply_text(f"❌ Error fetching logs: {str(e)}")
+
+@app.on_message(filters.command("cleanup") & filters.user(ADMIN_IDS))
+async def cleanup_command(client, message):
+    """Clean up old files and data (Admin only)"""
+    try:
+        # Clean up download directory
+        files_removed = 0
+        if os.path.exists(DOWNLOAD_PATH):
+            for filename in os.listdir(DOWNLOAD_PATH):
+                filepath = os.path.join(DOWNLOAD_PATH, filename)
+                try:
+                    os.remove(filepath)
+                    files_removed += 1
+                except Exception as e:
+                    logger.error(f"Error removing file {filepath}: {e}")
+        
+        # Clean up old progress data
+        download_progress.clear()
+        upload_progress.clear()
+        
+        cleanup_text = (
+            f"🧹 **Cleanup Completed!**\n\n"
+            f"📁 **Files Removed:** {files_removed}\n"
+            f"🗑️ **Progress Data:** Cleared\n"
+            f"💾 **Memory:** Freed\n\n"
+            f"✅ **Status:** Success"
+        )
+        
+        await message.reply_text(cleanup_text)
+        
+    except Exception as e:
+        logger.error(f"Cleanup command error: {e}")
+        await message.reply_text(f"❌ Cleanup failed: {str(e)}")
+
+# Error handler for callback queries
+@app.on_callback_query()
+async def handle_unknown_callbacks(client, callback: CallbackQuery):
+    """Handle unknown callback queries"""
+    await callback.answer("❌ Unknown action or session expired!", show_alert=True)
+
+# Global error handler
+async def error_handler(client, update, exception):
+    """Global error handler"""
+    logger.error(f"An error occurred: {exception}")
+    
+    try:
+        if hasattr(update, 'message') and update.message:
+            await update.message.reply_text(
+                "❌ **An unexpected error occurred!**\n\n"
+                "Please try again later or contact support.\n"
+                "📤 **Support:** @NY_BOTS"
+            )
+        elif hasattr(update, 'callback_query') and update.callback_query:
+            await update.callback_query.answer(
+                "❌ An error occurred! Please try again.",
+                show_alert=True
+            )
+    except Exception as e:
+        logger.error(f"Error in error handler: {e}")
+
+# Bot startup and shutdown handlers
+@app.on_message(filters.command("ping"))
+async def ping_command(client, message):
+    """Ping command to check bot status"""
+    start_time = time.time()
+    ping_msg = await message.reply_text("🏓 **Pinging...**")
+    end_time = time.time()
+    
+    ping_time = round((end_time - start_time) * 1000, 2)
+    
+    await safe_edit_message(
+        ping_msg,
+        f"🏓 **Pong!**\n\n"
+        f"⚡ **Response Time:** `{ping_time}ms`\n"
+        f"🤖 **Bot Status:** `Online`\n"
+        f"🔧 **Version:** `2.0`\n"
+        f"📊 **Performance:** `Excellent`"
+    )
+
+@app.on_message(filters.command("version"))
+async def version_command(client, message):
+    """Show bot version and info"""
+    version_text = (
+        f"🤖 **Bot Information**\n\n"
+        f"📛 **Name:** Advanced Terabox Bot\n"
+        f"🔢 **Version:** 2.0.0\n"
+        f"🐍 **Python:** 3.11+\n"
+        f"📚 **Pyrogram:** 2.0+\n"
+        f"🗄️ **Database:** MongoDB\n"
+        f"⚡ **Engine:** Multi-threaded\n"
+        f"🚀 **Speed:** Ultra Fast\n\n"
+        f"👨‍💻 **Developer:** @NY_BOTS\n"
+        f"📅 **Last Update:** {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"🔗 **GitHub:** Coming Soon\n\n"
+        f"✨ **Features:**\n"
+        f"• Advanced download algorithms\n"
+        f"• Real-time progress tracking\n"
+        f"• Smart file type detection\n"
+        f"• Comprehensive statistics\n"
+        f"• User preference settings"
+    )
+    
+    await message.reply_text(version_text)
+
+# Database connection test
+async def test_database():
+    """Test database connection"""
+    try:
+        await users_collection.find_one({})
+        logger.info("✅ Database connection successful")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Database connection failed: {e}")
+        return False
+
+# Bot initialization
+async def initialize_bot():
+    """Initialize bot and check connections"""
+    logger.info("🚀 Initializing Terabox Download Bot...")
+    
+    # Test database connection
+    db_status = await test_database()
+    if not db_status:
+        logger.error("❌ Database connection failed. Bot may not work properly.")
+    
+    # Create indexes for better performance
+    try:
+        await users_collection.create_index("user_id", unique=True)
+        await stats_collection.create_index("user_id")
+        await stats_collection.create_index("download_date")
+        logger.info("✅ Database indexes created")
+    except Exception as e:
+        logger.error(f"❌ Error creating indexes: {e}")
+    
+    logger.info("✅ Bot initialization completed")
+
+# Cleanup on shutdown
+async def cleanup_on_shutdown():
+    """Cleanup when bot shuts down"""
+    logger.info("🛑 Bot shutting down...")
+    
+    # Clean up temporary files
+    try:
+        if os.path.exists(DOWNLOAD_PATH):
+            for filename in os.listdir(DOWNLOAD_PATH):
+                filepath = os.path.join(DOWNLOAD_PATH, filename)
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    logger.error(f"Error removing file {filepath}: {e}")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+    
+    # Clear progress data
+    download_progress.clear()
+    upload_progress.clear()
+    
+    logger.info("✅ Cleanup completed")
+
+# Main execution
+if __name__ == "__main__":
+    logger.info("🚀 Starting Advanced Terabox Download Bot...")
+    
+    try:
+        # Run initialization
+        asyncio.get_event_loop().run_until_complete(initialize_bot())
+        
+        # Start the bot
+        app.run()
+        
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Bot startup error: {e}")
+    finally:
+        # Cleanup on exit
+        try:
+            asyncio.get_event_loop().run_until_complete(cleanup_on_shutdown())
+        except Exception as e:
+            logger.error(f"❌ Cleanup error: {e}")
