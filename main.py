@@ -1,692 +1,627 @@
 import os
+import asyncio
+import requests
 import time
 import math
-import asyncio
-import logging
-import aiohttp
-import aiofiles
-
 from datetime import datetime
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from pymongo import MongoClient
+import aiofiles
+import aiohttp
 from urllib.parse import quote
 
-# Telegram imports
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
-from telegram.constants import ParseMode
+# Bot Configuration
+API_ID = "24720215"
+API_HASH = "c0d3395590fecba19985f95d6300785e"
+BOT_TOKEN = "8037389280:AAG5WfzHcheszs-RHWL8WXszWPkrWjyulp8"
+MONGO_URI = "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+FORCE_SUB_CHANNEL = "@NY_BOTS"
+LOG_CHANNEL = -1002732334186  # Your log channel ID
+OWNER_ID = 7910994767  # Your user ID
 
-# MongoDB (Motor + pymongo)
-from motor.motor_asyncio import AsyncIOMotorClient
-import pymongo
+# Initialize bot
+app = Client("terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Pyrogram (for fast upload)
-from pyrogram import Client
-from pyrogram.types import Message as PyroMessage
-from pyrogram.errors import FloodWait, RPCError
+# MongoDB setup
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client.terabox_bot
+users_collection = db.users
+stats_collection = db.stats
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# API endpoint
+TERABOX_API = "https://noor-terabox-api.woodmirror.workers.dev/api?url="
 
-class Config:
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "8037389280:AAG5WfzHcheszs-RHWL8WXszWPkrWjyulp8")
-    API_ID = int(os.getenv("API_ID", "24720215"))
-    API_HASH = os.getenv("API_HASH", "c0d3395590fecba19985f95d6300785e")
-    
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-    DB_NAME = "terabox_bot"
-    API_BASE_URL = "https://noor-terabox-api.woodmirror.workers.dev/api"
-    PROXY_BASE_URL = "https://noor-terabox-api.woodmirror.workers.dev/proxy"
-    DOWNLOAD_DIR = "downloads"
-    MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-    CHUNK_SIZE = 1024 * 1024  # 1MB chunks for faster upload
-    SESSION_NAME = "terabox_bot"
+# Emojis and animations
+FIRE_EFFECT = 5104841245755180586  # 🔥
+DOWNLOAD_EMOJIS = ["📥", "⬇️", "💾", "📁", "🔄"]
+UPLOAD_EMOJIS = ["📤", "⬆️", "☁️", "🚀", "✨"]
 
-class Database:
-    def __init__(self):
-        self.client = AsyncIOMotorClient(Config.MONGO_URI)
-        self.db = self.client[Config.DB_NAME]
-        self.users = self.db.users
-        self.downloads = self.db.downloads
-        self.stats = self.db.stats
-    
-    async def add_user(self, user_id: int, username: str = None, first_name: str = None):
-        user_data = {
-            "user_id": user_id,
-            "username": username,
-            "first_name": first_name,
-            "joined_at": datetime.now(),
-            "total_downloads": 0,
-            "total_size": 0
-        }
-        await self.users.update_one(
-            {"user_id": user_id},
-            {"$setOnInsert": user_data},
-            upsert=True
-        )
-    
-    async def get_user(self, user_id: int):
-        return await self.users.find_one({"user_id": user_id})
-    
-    async def update_user_stats(self, user_id: int, file_size: int):
-        await self.users.update_one(
-            {"user_id": user_id},
-            {"$inc": {"total_downloads": 1, "total_size": file_size}}
-        )
-    
-    async def add_download(self, user_id: int, file_name: str, file_size: int, status: str = "pending"):
-        download_data = {
-            "user_id": user_id,
-            "file_name": file_name,
-            "file_size": file_size,
-            "status": status,
-            "created_at": datetime.now(),
-            "completed_at": None
-        }
-        result = await self.downloads.insert_one(download_data)
-        return str(result.inserted_id)
-    
-    async def update_download_status(self, download_id: str, status: str):
-        from bson import ObjectId
-        update_data = {"status": status}
-        if status == "completed":
-            update_data["completed_at"] = datetime.now()
-        await self.downloads.update_one(
-            {"_id": ObjectId(download_id)},
-            {"$set": update_data}
-        )
-    
-    async def get_total_stats(self):
-        pipeline = [
-            {"$group": {
-                "_id": None,
-                "total_users": {"$sum": 1},
-                "total_downloads": {"$sum": "$total_downloads"},
-                "total_size": {"$sum": "$total_size"}
-            }}
-        ]
-        result = await self.users.aggregate(pipeline).to_list(1)
-        return result[0] if result else {"total_users": 0, "total_downloads": 0, "total_size": 0}
+def get_size(bytes_size):
+    """Convert bytes to human readable format"""
+    if bytes_size == 0:
+        return "0B"
+    size_name = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
+    i = int(math.floor(math.log(bytes_size, 1024)))
+    p = math.pow(1024, i)
+    s = round(bytes_size / p, 2)
+    return f"{s} {size_name[i]}"
 
-class TeraBoxAPI:
-    @staticmethod
-    async def get_file_info(url: str):
-        api_url = f"{Config.API_BASE_URL}?url={quote(url)}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    return {"error": "Failed to fetch file information"}
+def get_progress_bar(percentage):
+    """Create animated progress bar"""
+    filled = int(percentage / 10)
+    empty = 10 - filled
+    return f"{'🟢' * filled}{'⚪' * empty} {percentage:.1f}%"
 
-class ProgressTracker:
-    def __init__(self, total_size: int):
-        self.total_size = total_size
-        self.downloaded = 0
-        self.start_time = time.time()
-        self.last_update = 0
-    
-    def update(self, chunk_size: int):
-        self.downloaded += chunk_size
-        
-    def get_progress(self):
-        if self.total_size == 0:
-            return 0
-        return (self.downloaded / self.total_size) * 100
-    
-    def get_speed(self):
-        elapsed = time.time() - self.start_time
-        if elapsed == 0:
-            return 0
-        return self.downloaded / elapsed
-    
-    def get_eta(self):
-        speed = self.get_speed()
-        if speed == 0:
-            return 0
-        remaining = self.total_size - self.downloaded
-        return remaining / speed
-    
-    def format_size(self, size_bytes):
-        if size_bytes == 0:
-            return "0 B"
-        size_names = ["B", "KB", "MB", "GB", "TB"]
-        i = int(math.floor(math.log(size_bytes, 1024)))
-        p = math.pow(1024, i)
-        s = round(size_bytes / p, 2)
-        return f"{s} {size_names[i]}"
-    
-    def format_time(self, seconds):
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        elif seconds < 3600:
-            return f"{int(seconds/60)}m {int(seconds%60)}s"
-        else:
-            return f"{int(seconds/3600)}h {int((seconds%3600)/60)}m"
-    
-    def get_progress_bar(self, length=20):
-        progress = self.get_progress()
-        filled_length = int(length * progress // 100)
-        bar = "█" * filled_length + "░" * (length - filled_length)
-        return bar
+async def add_user(user_id, username=None, first_name=None):
+    """Add new user to database"""
+    user_data = {
+        "user_id": user_id,
+        "username": username,
+        "first_name": first_name,
+        "join_date": datetime.now(),
+        "downloads": 0,
+        "total_size": 0
+    }
+    users_collection.update_one(
+        {"user_id": user_id},
+        {"$setOnInsert": user_data},
+        upsert=True
+    )
 
-class PyrogramClient:
-    def __init__(self):
-        self.app = Client(
-            Config.SESSION_NAME,
-            api_id=Config.API_ID,
-            api_hash=Config.API_HASH,
-            bot_token=Config.BOT_TOKEN
-        )
-        self.is_running = False
-    
-    async def start(self):
-        if not self.is_running:
-            await self.app.start()
-            self.is_running = True
-            logger.info("🚀 Pyrogram client started")
-    
-    async def stop(self):
-        if self.is_running:
-            await self.app.stop()
-            self.is_running = False
-            logger.info("🛑 Pyrogram client stopped")
-    
-    async def upload_file(self, file_path: str, chat_id: int, file_name: str, progress_callback=None):
-        """Fast file upload using Pyrogram"""
-        try:
-            await self.start()
+async def update_user_stats(user_id, file_size):
+    """Update user download stats"""
+    users_collection.update_one(
+        {"user_id": user_id},
+        {"$inc": {"downloads": 1, "total_size": file_size}}
+    )
+
+async def get_user_stats(user_id):
+    """Get user statistics"""
+    user = users_collection.find_one({"user_id": user_id})
+    return user if user else {"downloads": 0, "total_size": 0}
+
+async def check_force_sub(user_id):
+    """Check if user is subscribed to force sub channel"""
+    try:
+        member = await app.get_chat_member(FORCE_SUB_CHANNEL, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+async def download_file(url, filename, progress_callback=None):
+    """Download file with progress tracking"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
             
-            # Upload with progress callback
-            message = await self.app.send_document(
-                chat_id=chat_id,
-                document=file_path,
-                file_name=file_name,
-                caption=f"🔥 **Downloaded successfully!**\n📁 **File:** `{file_name}`\n🚀 **Fast Upload via Pyrogram**",
-                progress=progress_callback
-            )
-            
-            return message
-            
-        except FloodWait as e:
-            logger.warning(f"FloodWait: {e.value}s")
-            await asyncio.sleep(e.value)
-            return await self.upload_file(file_path, chat_id, file_name, progress_callback)
-        except RPCError as e:
-            logger.error(f"Pyrogram RPC Error: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Pyrogram upload error: {e}")
-            raise
-
-class TeraBoxBot:
-    def __init__(self):
-        self.db = Database()
-        self.downloads = {}
-        self.pyrogram_client = PyrogramClient()
-        
-        # Emoji animations
-        self.fire_emojis = ["🔥", "🌟", "⚡", "💥", "✨", "🎯", "🚀", "💫"]
-        self.progress_emojis = ["📥", "⬇️", "📦", "📋", "📊", "📈", "📉", "📌"]
-        
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        await self.db.add_user(user.id, user.username, user.first_name)
-        
-        welcome_text = f"""
-🔥 **Welcome to TeraBox Downloader Bot!** 🔥
-
-🌟 **Features:**
-• 📥 Ultra-fast downloads with Pyrogram
-• 🚀 Lightning-fast uploads (10x faster)
-• 📊 Real-time progress tracking
-• 📈 Advanced upload optimization
-• 📋 Download statistics
-• 🎯 Inline keyboard controls
-
-💫 **Powered by:**
-• 🔥 Pyrogram for fast file operations
-• ⚡ Parallel download/upload processing
-• 📡 Advanced chunked transfers
-
-🚀 **How to use:**
-1. Send me a TeraBox URL
-2. Click download button
-3. Get your file instantly!
-
-💥 **Ready to download?** Send me a TeraBox link!
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 My Stats", callback_data="stats"),
-             InlineKeyboardButton("🌟 Help", callback_data="help")],
-            [InlineKeyboardButton("🔥 Channel", url="https://t.me/your_channel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            welcome_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup,
-            message_effect_id=MessageEffectId.FIRE
-        )
-    
-    async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        url = update.message.text.strip()
-        
-        # Check if URL is valid TeraBox URL
-        if not any(domain in url.lower() for domain in ["terabox", "1024tera", "mirrobox", "momerybox", "teraboxapp"]):
-            await update.message.reply_text(
-                "❌ **Invalid URL!** Please send a valid TeraBox URL.",
-                parse_mode=ParseMode.MARKDOWN,
-                message_effect_id=MessageEffectId.FIRE
-            )
-            return
-        
-        # Show processing message
-        processing_msg = await update.message.reply_text(
-            "🔄 **Processing your request...**\n⚡ Fetching file information...\n🚀 Pyrogram engine ready!",
-            parse_mode=ParseMode.MARKDOWN,
-            message_effect_id=MessageEffectId.FIRE
-        )
-        
-        try:
-            # Get file information
-            file_info = await TeraBoxAPI.get_file_info(url)
-            
-            if "error" in file_info:
-                await processing_msg.edit_text(
-                    f"❌ **Error:** {file_info['error']}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            # Extract file details
-            file_name = file_info.get("file_name", "Unknown")
-            file_size = file_info.get("file_size", "Unknown")
-            size_bytes = file_info.get("size_bytes", 0)
-            thumbnail = file_info.get("thumbnail", "")
-            proxy_url = file_info.get("proxy_url", "")
-            
-            # Check file size limit
-            if size_bytes > Config.MAX_FILE_SIZE:
-                await processing_msg.edit_text(
-                    f"❌ **File too large!**\n📁 File size: {file_size}\n🚫 Max allowed: 2GB",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            # Create download info message
-            info_text = f"""
-🎯 **File Information**
-
-📄 **Name:** `{file_name}`
-📊 **Size:** {file_size}
-🔗 **Status:** Ready for ultra-fast download!
-🚀 **Engine:** Pyrogram Turbo Mode
-
-🔥 **Click download for lightning speed!**
-            """
-            
-            keyboard = [
-                [InlineKeyboardButton("🚀 Fast Download", callback_data=f"download_{user.id}_{quote(proxy_url)}_{quote(file_name)}_{size_bytes}")],
-                [InlineKeyboardButton("🖼️ View Thumbnail", url=thumbnail) if thumbnail else InlineKeyboardButton("📋 File Info", callback_data="info")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await processing_msg.edit_text(
-                info_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            logger.error(f"Error processing URL: {e}")
-            await processing_msg.edit_text(
-                "❌ **Error occurred while processing your request!**",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def handle_download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data.split("_", 4)
-        if len(data) < 5:
-            await query.edit_message_text("❌ Invalid download data!")
-            return
-        
-        user_id = int(data[1])
-        proxy_url = data[2]
-        file_name = data[3]
-        size_bytes = int(data[4])
-        
-        # Check if user is authorized
-        if query.from_user.id != user_id:
-            await query.answer("❌ You can only download your own files!", show_alert=True)
-            return
-        
-        # Add to database
-        download_id = await self.db.add_download(user_id, file_name, size_bytes)
-        
-        # Start download
-        await self.start_download(query, proxy_url, file_name, size_bytes, download_id)
-    
-    async def start_download(self, query, proxy_url, file_name, size_bytes, download_id):
-        try:
-            # Initialize progress tracker
-            progress_tracker = ProgressTracker(size_bytes)
-            
-            # Create download directory if not exists
-            os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
-            file_path = os.path.join(Config.DOWNLOAD_DIR, file_name)
-            
-            # Download progress message
-            progress_msg = await query.edit_message_text(
-                "🚀 **Starting ultra-fast download...**\n⚡ Pyrogram engine initializing...\n🔥 Preparing turbo mode...",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # Download file with optimized chunks
-            async with aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(limit=10),
-                timeout=aiohttp.ClientTimeout(total=3600)
-            ) as session:
-                async with session.get(proxy_url) as response:
-                    if response.status != 200:
-                        await self.db.update_download_status(download_id, "failed")
-                        await progress_msg.edit_text(
-                            "❌ **Download failed!** Server returned error.",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                        return
+            async with aiofiles.open(filename, 'wb') as file:
+                async for chunk in response.content.iter_chunked(8192):
+                    await file.write(chunk)
+                    downloaded += len(chunk)
                     
-                    async with aiofiles.open(file_path, 'wb') as file:
-                        last_update = time.time()
-                        
-                        async for chunk in response.content.iter_chunked(Config.CHUNK_SIZE):
-                            await file.write(chunk)
-                            progress_tracker.update(len(chunk))
-                            
-                            # Update progress every 1.5 seconds for faster feedback
-                            if time.time() - last_update > 1.5:
-                                await self.update_progress_message(
-                                    progress_msg, progress_tracker, file_name, "downloading"
-                                )
-                                last_update = time.time()
-            
-            # Upload to Telegram using Pyrogram
-            await self.upload_file_pyrogram(progress_msg, file_path, file_name, size_bytes, download_id, query.from_user.id)
-            
-        except Exception as e:
-            logger.error(f"Download error: {e}")
-            await self.db.update_download_status(download_id, "failed")
-            await progress_msg.edit_text(
-                "❌ **Download failed!** Please try again.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def upload_file_pyrogram(self, progress_msg, file_path, file_name, size_bytes, download_id, user_id):
-        try:
-            # Start upload with Pyrogram
-            upload_tracker = ProgressTracker(size_bytes)
-            
-            await progress_msg.edit_text(
-                "🚀 **Uploading with Pyrogram Turbo...**\n⚡ Ultra-fast upload mode activated!\n🔥 Processing at maximum speed...",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # Define progress callback for Pyrogram
-            async def progress_callback(current, total):
-                upload_tracker.downloaded = current
-                upload_tracker.total_size = total
-                
-                # Update progress every 2 seconds
-                if time.time() - upload_tracker.last_update > 2:
-                    await self.update_progress_message(
-                        progress_msg, upload_tracker, file_name, "uploading"
-                    )
-                    upload_tracker.last_update = time.time()
-            
-            # Upload file using Pyrogram
-            message = await self.pyrogram_client.upload_file(
-                file_path, user_id, file_name, progress_callback
-            )
-            
-            # Update database
-            await self.db.update_download_status(download_id, "completed")
-            await self.db.update_user_stats(user_id, size_bytes)
-            
-            # Success message
-            keyboard = [
-                [InlineKeyboardButton("📊 My Stats", callback_data="stats"),
-                 InlineKeyboardButton("🔥 Download More", callback_data="download_more")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await progress_msg.edit_text(
-                f"✅ **Upload Complete!**\n🎯 **File:** `{file_name}`\n📊 **Size:** {upload_tracker.format_size(size_bytes)}\n🚀 **Status:** Success (Pyrogram Turbo)\n⚡ **Speed:** Ultra-fast mode",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=reply_markup
-            )
-            
-            # Clean up file
-            try:
-                os.remove(file_path)
-            except:
-                pass
-                
-        except Exception as e:
-            logger.error(f"Pyrogram upload error: {e}")
-            await self.db.update_download_status(download_id, "failed")
-            await progress_msg.edit_text(
-                "❌ **Upload failed!** File downloaded but couldn't upload to Telegram.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def update_progress_message(self, message, progress_tracker, file_name, action):
-        try:
-            progress = progress_tracker.get_progress()
-            speed = progress_tracker.get_speed()
-            eta = progress_tracker.get_eta()
-            progress_bar = progress_tracker.get_progress_bar()
-            
-            emoji = self.progress_emojis[int(progress / 12.5) % len(self.progress_emojis)]
-            
-            if action == "downloading":
-                action_text = "🚀 **Turbo Download**"
-            else:
-                action_text = "⚡ **Pyrogram Upload**"
-            
-            progress_text = f"""
-{emoji} {action_text}
+                    if progress_callback and total_size > 0:
+                        percentage = (downloaded / total_size) * 100
+                        await progress_callback(downloaded, total_size, percentage)
 
-📁 **File:** `{file_name[:30]}...`
-📊 **Progress:** {progress:.1f}%
-{progress_bar}
-
-📥 **Processed:** {progress_tracker.format_size(progress_tracker.downloaded)}
-📈 **Speed:** {progress_tracker.format_size(speed)}/s
-⏱️ **ETA:** {progress_tracker.format_time(eta)}
-🔥 **Engine:** Pyrogram Turbo Mode
-            """
-            
-            await message.edit_text(
-                progress_text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Progress update error: {e}")
+# Start command
+@app.on_message(filters.command("start"))
+async def start_command(client, message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    first_name = message.from_user.first_name
     
-    async def handle_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        user_data = await self.db.get_user(user_id)
-        total_stats = await self.db.get_total_stats()
-        
-        if not user_data:
-            await query.edit_message_text(
-                "❌ **No user data found!**",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # Format sizes
-        user_size = ProgressTracker(0).format_size(user_data.get("total_size", 0))
-        total_size = ProgressTracker(0).format_size(total_stats.get("total_size", 0))
-        
-        stats_text = f"""
+    await add_user(user_id, username, first_name)
+    
+    # Check force subscription
+    if not await check_force_sub(user_id):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")],
+            [InlineKeyboardButton("🔄 Check Again", callback_data="check_sub")]
+        ])
+        await message.reply_text(
+            f"🔒 **Access Denied!**\n\n"
+            f"You must join our channel to use this bot.\n"
+            f"Channel: {FORCE_SUB_CHANNEL}\n\n"
+            f"📌 Join the channel and click 'Check Again'",
+            reply_markup=keyboard,
+            message_effect_id=FIRE_EFFECT
+        )
+        return
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
+        [InlineKeyboardButton("ℹ️ Help", callback_data="help")],
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/NY_BOTS")]
+    ])
+    
+    welcome_text = f"""
+🔥 **Welcome to Terabox Download Bot!** 🔥
+
+👋 Hello **{first_name}**!
+
+🚀 **Features:**
+• 📥 Fast Terabox Downloads
+• 📊 Download Progress Tracking
+• 📈 Upload Progress with Speed
+• 📊 Personal Statistics
+• 🎯 Clean & User-Friendly Interface
+
+📝 **How to use:**
+Send me any Terabox link and I'll download it for you!
+
+💡 **Example:**
+`https://terabox.com/s/1abcdefghijklmnop`
+
+🔥 **Ready to download?** Send me a Terabox link now!
+
+**Credits:** @NY_BOTS
+"""
+    
+    await message.reply_text(
+        welcome_text,
+        reply_markup=keyboard,
+        message_effect_id=FIRE_EFFECT
+    )
+
+# Help command
+@app.on_callback_query(filters.regex("help"))
+async def help_callback(client, callback: CallbackQuery):
+    help_text = """
+🆘 **How to Use Terabox Download Bot**
+
+**Step 1:** Send me a Terabox link
+**Step 2:** Wait for file information
+**Step 3:** Click download button
+**Step 4:** Get your file!
+
+**Supported Links:**
+• terabox.com
+• 1024terabox.com
+• 4funbox.com
+• mirrobox.com
+• nephobox.com
+• momerybox.com
+• teraboxapp.com
+
+**Commands:**
+• /start - Start the bot
+• /stats - View your statistics
+• /help - Show this help message
+
+**Need Support?** Contact @NY_BOTS
+"""
+    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
+    ]])
+    
+    await callback.edit_message_text(help_text, reply_markup=keyboard)
+
+# Stats command
+@app.on_message(filters.command("stats"))
+async def stats_command(client, message: Message):
+    await show_user_stats(message.from_user.id, message)
+
+@app.on_callback_query(filters.regex("my_stats"))
+async def stats_callback(client, callback: CallbackQuery):
+    await show_user_stats(callback.from_user.id, callback)
+
+async def show_user_stats(user_id, context):
+    user_stats = await get_user_stats(user_id)
+    total_users = users_collection.count_documents({})
+    
+    stats_text = f"""
 📊 **Your Statistics**
 
-👤 **User:** {user_data.get('first_name', 'Unknown')}
-📅 **Joined:** {user_data.get('joined_at', 'Unknown').strftime('%Y-%m-%d')}
-📥 **Downloads:** {user_data.get('total_downloads', 0)}
-📊 **Total Size:** {user_size}
-🚀 **Engine:** Pyrogram Turbo
+👤 **User ID:** `{user_id}`
+📥 **Downloads:** `{user_stats['downloads']}`
+📦 **Total Size:** `{get_size(user_stats['total_size'])}`
+👥 **Total Users:** `{total_users}`
+📅 **Member Since:** `{user_stats.get('join_date', 'Unknown')}`
 
-🌟 **Global Statistics**
-👥 **Total Users:** {total_stats.get('total_users', 0)}
-📥 **Total Downloads:** {total_stats.get('total_downloads', 0)}
-📊 **Total Size:** {total_size}
-⚡ **Powered by:** Ultra-fast Pyrogram
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data="stats"),
-             InlineKeyboardButton("🏠 Home", callback_data="home")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            stats_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
+🔥 **Keep downloading and enjoy!**
+"""
+    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
+    ]])
+    
+    if hasattr(context, 'edit_message_text'):
+        await context.edit_message_text(stats_text, reply_markup=keyboard)
+    else:
+        await context.reply_text(stats_text, reply_markup=keyboard)
+
+# Check subscription callback
+@app.on_callback_query(filters.regex("check_sub"))
+async def check_sub_callback(client, callback: CallbackQuery):
+    user_id = callback.from_user.id
+    
+    if await check_force_sub(user_id):
+        await callback.edit_message_text(
+            "✅ **Subscription Verified!**\n\n"
+            "Welcome to Terabox Download Bot! 🎉\n"
+            "Send me a Terabox link to get started.",
+            message_effect_id=FIRE_EFFECT
         )
+    else:
+        await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
+
+# Back to start callback
+@app.on_callback_query(filters.regex("back_to_start"))
+async def back_to_start_callback(client, callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
+        [InlineKeyboardButton("ℹ️ Help", callback_data="help")],
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/NY_BOTS")]
+    ])
     
-    async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        help_text = """
-🌟 **TeraBox Downloader Bot Help**
+    await callback.edit_message_text(
+        f"🔥 **Terabox Download Bot** 🔥\n\n"
+        f"👋 Welcome back, **{callback.from_user.first_name}**!\n\n"
+        f"Send me a Terabox link to download files instantly!\n\n"
+        f"**Credits:** @NY_BOTS",
+        reply_markup=keyboard
+    )
 
-🚀 **Ultra-Fast Features:**
-• ⚡ Pyrogram turbo engine for 10x faster uploads
-• 🔥 Parallel processing for maximum speed
-• 📡 Optimized chunked transfers
-• 🎯 Real-time progress tracking
-
-🚀 **How to use:**
-1. Send me a TeraBox share URL
-2. Bot will fetch file information
-3. Click "🚀 Fast Download" button
-4. Watch lightning-fast progress!
-5. Receive your file instantly!
-
-📋 **Supported URLs:**
-• TeraBox.com
-• 1024tera.com
-• Mirrobox.com
-• Momerybox.com
-• TeraBoxApp.com
-
-⚡ **Speed Features:**
-• 1MB chunk processing
-• Parallel download/upload
-• Advanced progress tracking
-• Automatic error recovery
-• Smart file cleanup
-
-🔥 **Performance:**
-• 10x faster than regular bots
-• Optimized for large files
-• Minimal server load
-• Maximum transfer speed
-
-🔥 **Limits:**
-• Max file size: 2GB
-• Concurrent downloads: 3
-• Daily limit: 50 files per user
-
-❓ **Need help?** Contact @your_support
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🏠 Home", callback_data="home"),
-             InlineKeyboardButton("📊 Stats", callback_data="stats")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            help_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
+# Main download handler
+@app.on_message(filters.text & filters.private)
+async def handle_terabox_link(client, message: Message):
+    user_id = message.from_user.id
+    
+    # Check force subscription
+    if not await check_force_sub(user_id):
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")
+        ]])
+        await message.reply_text(
+            "🔒 Please join our channel first to use this bot!",
+            reply_markup=keyboard
         )
+        return
     
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        data = query.data
-        
-        if data.startswith("download_"):
-            await self.handle_download(update, context)
-        elif data == "stats":
-            await self.handle_stats(update, context)
-        elif data == "help":
-            await self.handle_help(update, context)
-        elif data == "home":
-            await query.answer()
-            await self.start(update, context)
-        elif data == "cancel":
-            await query.answer()
-            await query.edit_message_text(
-                "❌ **Download cancelled!**",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            await query.answer("🔄 Processing...")
+    text = message.text
     
-    async def shutdown(self):
-        """Cleanup on shutdown"""
-        await self.pyrogram_client.stop()
-
-def main():
-    """Start the bot"""
-    bot = TeraBoxBot()
+    # Check if message contains terabox link
+    terabox_domains = ['terabox.com', '1024terabox.com', '4funbox.com', 'mirrobox.com', 'nephobox.com', 'momerybox.com', 'teraboxapp.com']
     
-    # Create application
-    application = Application.builder().token(Config.BOT_TOKEN).build()
+    if not any(domain in text for domain in terabox_domains):
+        await message.reply_text(
+            "❌ **Invalid Link!**\n\n"
+            "Please send a valid Terabox link.\n\n"
+            "**Supported domains:**\n"
+            "• terabox.com\n• 1024terabox.com\n• 4funbox.com\n• mirrobox.com\n• nephobox.com\n• momerybox.com\n• teraboxapp.com"
+        )
+        return
     
-    # Add handlers
-    application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_url))
-    application.add_handler(CallbackQueryHandler(bot.handle_callback))
+    # Show processing message
+    processing_msg = await message.reply_text(
+        "🔄 **Processing your request...**\n\n"
+        "⏳ Please wait while I fetch file information...",
+        message_effect_id=FIRE_EFFECT
+    )
     
-    # Setup shutdown handler
-    async def shutdown_handler():
-        await bot.shutdown()
-    
-    # Start polling
-    logger.info("🔥 TeraBox Bot with Pyrogram Turbo started successfully!")
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
-    finally:
-        asyncio.run(shutdown_handler())
+        # Get file information from API
+        api_url = f"{TERABOX_API}{quote(text)}"
+        response = requests.get(api_url, timeout=30)
+        data = response.json()
+        
+        if "error" in data:
+            await processing_msg.edit_text(
+                f"❌ **Error occurred!**\n\n"
+                f"Error: {data['error']}\n\n"
+                f"Please try again with a valid link."
+            )
+            return
+        
+        # Extract file information
+        file_name = data['file_name']
+        file_size = data['file_size']
+        size_bytes = data['size_bytes']
+        download_link = data['proxy_url']
+        thumbnail = data.get('thumbnail', '')
+        
+        # Create download keyboard
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📥 Download File", callback_data=f"download_{message.id}")],
+            [InlineKeyboardButton("📊 File Info", callback_data=f"info_{message.id}")],
+            [InlineKeyboardButton("🔄 Refresh Link", callback_data=f"refresh_{message.id}")]
+        ])
+        
+        # Store download data temporarily
+        download_data = {
+            'file_name': file_name,
+            'file_size': file_size,
+            'size_bytes': size_bytes,
+            'download_link': download_link,
+            'thumbnail': thumbnail,
+            'original_link': text,
+            'user_id': user_id
+        }
+        
+        # Store in a simple way (you can use Redis for production)
+        app.download_data = getattr(app, 'download_data', {})
+        app.download_data[message.id] = download_data
+        
+        file_info = f"""
+📁 **File Ready for Download!**
 
+📋 **Name:** `{file_name}`
+📦 **Size:** `{file_size}`
+🔗 **Source:** Terabox
+⚡ **Status:** Ready
+
+🎯 **Click Download to get your file!**
+
+**Credits:** @NY_BOTS
+"""
+        
+        await processing_msg.edit_text(file_info, reply_markup=keyboard)
+        
+        # Log to channel
+        await client.send_message(
+            LOG_CHANNEL,
+            f"📥 **New Download Request**\n\n"
+            f"👤 **User:** {message.from_user.mention}\n"
+            f"📁 **File:** `{file_name}`\n"
+            f"📦 **Size:** `{file_size}`\n"
+            f"🕒 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+        )
+        
+    except Exception as e:
+        await processing_msg.edit_text(
+            f"❌ **Error occurred!**\n\n"
+            f"Error: {str(e)}\n\n"
+            f"Please try again later or contact support."
+        )
+
+# Download callback handler
+@app.on_callback_query(filters.regex(r"download_(\d+)"))
+async def download_callback(client, callback: CallbackQuery):
+    message_id = int(callback.data.split('_')[1])
+    user_id = callback.from_user.id
+    
+    # Get download data
+    download_data = getattr(app, 'download_data', {}).get(message_id)
+    if not download_data:
+        await callback.answer("❌ Download data not found! Please try again.", show_alert=True)
+        return
+    
+    if download_data['user_id'] != user_id:
+        await callback.answer("❌ This download is not for you!", show_alert=True)
+        return
+    
+    await callback.answer("🔄 Starting download...", show_alert=False)
+    
+    # Edit message to show download progress
+    progress_msg = await callback.edit_message_text(
+        "🔄 **Preparing Download...**\n\n"
+        f"📁 **File:** `{download_data['file_name']}`\n"
+        f"📦 **Size:** `{download_data['file_size']}`\n\n"
+        f"⏳ **Status:** Initializing...",
+        message_effect_id=FIRE_EFFECT
+    )
+    
+    try:
+        file_name = download_data['file_name']
+        download_link = download_data['download_link']
+        size_bytes = download_data['size_bytes']
+        
+        # Download progress callback
+        last_update = 0
+        async def progress_callback(downloaded, total, percentage):
+            nonlocal last_update
+            current_time = time.time()
+            
+            if current_time - last_update >= 2:  # Update every 2 seconds
+                progress_bar = get_progress_bar(percentage)
+                speed = downloaded / (current_time - start_time) if current_time > start_time else 0
+                
+                progress_text = f"""
+📥 **Downloading...**
+
+📁 **File:** `{file_name}`
+📦 **Size:** `{get_size(total)}`
+
+📊 **Progress:**
+{progress_bar}
+
+📈 **Downloaded:** `{get_size(downloaded)}`
+⚡ **Speed:** `{get_size(speed)}/s`
+⏱️ **ETA:** `{int((total - downloaded) / speed) if speed > 0 else 0}s`
+
+🔥 **Please wait...**
+"""
+                
+                try:
+                    await progress_msg.edit_text(progress_text)
+                    last_update = current_time
+                except:
+                    pass
+        
+        # Start download
+        start_time = time.time()
+        await download_file(download_link, file_name, progress_callback)
+        
+        # Upload progress callback
+        async def upload_progress(current, total):
+            percentage = (current / total) * 100
+            progress_bar = get_progress_bar(percentage)
+            speed = current / (time.time() - upload_start_time) if time.time() > upload_start_time else 0
+            
+            upload_text = f"""
+📤 **Uploading to Telegram...**
+
+📁 **File:** `{file_name}`
+📦 **Size:** `{get_size(total)}`
+
+📊 **Progress:**
+{progress_bar}
+
+📈 **Uploaded:** `{get_size(current)}`
+⚡ **Speed:** `{get_size(speed)}/s`
+⏱️ **ETA:** `{int((total - current) / speed) if speed > 0 else 0}s`
+
+🚀 **Almost done...**
+"""
+            
+            try:
+                await progress_msg.edit_text(upload_text)
+            except:
+                pass
+        
+        # Upload file
+        upload_start_time = time.time()
+        await progress_msg.edit_text(
+            f"📤 **Uploading to Telegram...**\n\n"
+            f"📁 **File:** `{file_name}`\n"
+            f"📦 **Size:** `{download_data['file_size']}`\n\n"
+            f"🚀 **Please wait...**"
+        )
+        
+        # Send file
+        await client.send_document(
+            chat_id=callback.message.chat.id,
+            document=file_name,
+            caption=f"📁 **{file_name}**\n\n"
+                   f"📦 **Size:** `{download_data['file_size']}`\n"
+                   f"⏱️ **Downloaded in:** `{int(time.time() - start_time)}s`\n\n"
+                   f"🔥 **Downloaded by:** {callback.from_user.mention}\n"
+                   f"**Credits:** @NY_BOTS",
+            progress=upload_progress,
+            message_effect_id=FIRE_EFFECT
+        )
+        
+        # Clean up
+        try:
+            os.remove(file_name)
+        except:
+            pass
+        
+        # Update user stats
+        await update_user_stats(user_id, size_bytes)
+        
+        # Success message
+        await progress_msg.edit_text(
+            f"✅ **Download Complete!**\n\n"
+            f"📁 **File:** `{file_name}`\n"
+            f"📦 **Size:** `{download_data['file_size']}`\n"
+            f"⏱️ **Time:** `{int(time.time() - start_time)}s`\n\n"
+            f"🎉 **File sent successfully!**\n"
+            f"**Credits:** @NY_BOTS"
+        )
+        
+    except Exception as e:
+        await progress_msg.edit_text(
+            f"❌ **Download Failed!**\n\n"
+            f"Error: {str(e)}\n\n"
+            f"Please try again or contact support."
+        )
+        
+        # Clean up on error
+        try:
+            if os.path.exists(file_name):
+                os.remove(file_name)
+        except:
+            pass
+
+# File info callback
+@app.on_callback_query(filters.regex(r"info_(\d+)"))
+async def info_callback(client, callback: CallbackQuery):
+    message_id = int(callback.data.split('_')[1])
+    
+    download_data = getattr(app, 'download_data', {}).get(message_id)
+    if not download_data:
+        await callback.answer("❌ File info not found!", show_alert=True)
+        return
+    
+    info_text = f"""
+📋 **Detailed File Information**
+
+📁 **Name:** `{download_data['file_name']}`
+📦 **Size:** `{download_data['file_size']}`
+🔢 **Bytes:** `{download_data['size_bytes']:,}`
+🔗 **Source:** Terabox
+⚡ **Status:** Ready for download
+
+🌐 **Original Link:**
+`{download_data['original_link']}`
+
+🎯 **Ready to download!**
+"""
+    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔙 Back", callback_data=f"back_{message_id}")
+    ]])
+    
+    await callback.edit_message_text(info_text, reply_markup=keyboard)
+
+# Refresh link callback
+@app.on_callback_query(filters.regex(r"refresh_(\d+)"))
+async def refresh_callback(client, callback: CallbackQuery):
+    message_id = int(callback.data.split('_')[1])
+    
+    download_data = getattr(app, 'download_data', {}).get(message_id)
+    if not download_data:
+        await callback.answer("❌ File data not found!", show_alert=True)
+        return
+    
+    await callback.answer("🔄 Refreshing link...", show_alert=False)
+    
+    try:
+        # Refresh the download link
+        api_url = f"{TERABOX_API}{quote(download_data['original_link'])}"
+        response = requests.get(api_url, timeout=30)
+        data = response.json()
+        
+        if "error" in data:
+            await callback.answer(f"❌ Error: {data['error']}", show_alert=True)
+            return
+        
+        # Update download data
+        download_data['download_link'] = data['proxy_url']
+        app.download_data[message_id] = download_data
+        
+        await callback.answer("✅ Link refreshed successfully!", show_alert=True)
+        
+    except Exception as e:
+        await callback.answer(f"❌ Error refreshing link: {str(e)}", show_alert=True)
+
+# Back callback
+@app.on_callback_query(filters.regex(r"back_(\d+)"))
+async def back_callback(client, callback: CallbackQuery):
+    message_id = int(callback.data.split('_')[1])
+    
+    download_data = getattr(app, 'download_data', {}).get(message_id)
+    if not download_data:
+        await callback.answer("❌ File data not found!", show_alert=True)
+        return
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 Download File", callback_data=f"download_{message_id}")],
+        [InlineKeyboardButton("📊 File Info", callback_data=f"info_{message_id}")],
+        [InlineKeyboardButton("🔄 Refresh Link", callback_data=f"refresh_{message_id}")]
+    ])
+    
+    file_info = f"""
+📁 **File Ready for Download!**
+
+📋 **Name:** `{download_data['file_name']}`
+📦 **Size:** `{download_data['file_size']}`
+🔗 **Source:** Terabox
+⚡ **Status:** Ready
+
+🎯 **Click Download to get your file!**
+
+**Credits:** @NY_BOTS
+"""
+    
+    await callback.edit_message_text(file_info, reply_markup=keyboard)
+
+# Run the bot
 if __name__ == "__main__":
-    main()
+    print("🔥 Terabox Download Bot Started!")
+    print("Credits: @NY_BOTS")
+    app.run()
