@@ -1,12 +1,17 @@
+# Core Telegram Bot Framework
 pyrogram==2.0.106
 tgcrypto==1.2.5
+
+# Async Support
 aiohttp==3.8.6
 aiofiles==23.2.1
+asyncio
+
+# MongoDB Support
 motor==3.3.2
+pymongo==4.6.0
+
+# Utility Libraries
 humanize==4.8.0
 requests==2.31.0
-pymongo==4.6.0
-asyncio
-logging
-datetime
 urllib3==1.26.18
