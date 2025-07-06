@@ -1,17 +1,37 @@
-# Core Telegram Bot Framework
+# Telegram Framework
 pyrogram==2.0.106
 tgcrypto==1.2.5
+pyromod==3.0.2
+git+https://github.com/eyMarv/pyroblack
 
-# Async Support
-aiohttp==3.8.6
+# Async + HTTP
+aiohttp==3.9.1
 aiofiles==23.2.1
-asyncio
+requests==2.31.0
 
 # MongoDB Support
 motor==3.3.2
 pymongo==4.6.0
+dnspython==2.4.2
 
-# Utility Libraries
+# File Handling and Processing
 humanize==4.8.0
-requests==2.31.0
-urllib3==1.26.18
+filetype==1.2.0
+hachoir==3.2.0
+psutil==5.9.6
+ffmpeg-python==0.2.0
+Pillow==10.1.0
+olefile==0.46
+
+# Utilities
+numpy==1.24.3
+pytz==2023.3
+tldextract==5.1.1
+
+# YouTube Downloading
+yt-dlp==2023.11.16
+pytube==15.0.0
+
+# Web Server (for webhook or hosting)
+flask==3.0.0
+gunicorn==20.1.0
