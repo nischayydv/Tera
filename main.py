@@ -35,7 +35,7 @@ LOG_CHANNEL = -1002732334186  # Your log channel ID
 OWNER_ID = 7910994767  # Your user ID
 DOWNLOAD_PATH = "downloads/"
 CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks for better speed
-MAX_CONCURRENT_DOWNLOADS = 3
+MAX_CONCURRENT_DOWNLOADS = 5
 
 # Initialize bot
 app = Client("terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -176,119 +176,139 @@ def get_system_info():
         logger.error(f"System info error: {e}")
     return {}
 
+import asyncio
+import aiohttp
+import os
+
+# Define a semaphore for limiting concurrent downloads
+MAX_CONCURRENT_DOWNLOADS = 5
+download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
 async def download_file_ultra_fast(url, filename, user_id, progress_message):
-    """Ultra-fast download with fixed timeout configuration"""
+    """Ultra-fast download with full CPU utilization"""
     global active_downloads
     
-    if active_downloads >= MAX_CONCURRENT_DOWNLOADS:
-        await safe_edit_message(progress_message, "⏳ **Queue Full**\nWaiting for slot...")
-        while active_downloads >= MAX_CONCURRENT_DOWNLOADS:
-            await asyncio.sleep(1)
-    
-    active_downloads += 1
-    filepath = os.path.join(DOWNLOAD_PATH, filename)
-    progress_tracker = ProgressTracker()
-    
-    try:
-        # Fixed connector settings
-        connector = aiohttp.TCPConnector(
-            limit=200,
-            limit_per_host=50,
-            ttl_dns_cache=300,
-            use_dns_cache=True,
-            enable_cleanup_closed=True,
-            keepalive_timeout=30,
-            force_close=False
-        )
+    async with download_semaphore:  # Limit concurrent downloads
+        if active_downloads >= MAX_CONCURRENT_DOWNLOADS:
+            await safe_edit_message(progress_message, "⏳ **Queue Full**\nWaiting for slot...")
+            while active_downloads >= MAX_CONCURRENT_DOWNLOADS:
+                await asyncio.sleep(1)
         
-        # Fixed timeout settings - removed conflict
-        timeout = aiohttp.ClientTimeout(
-            total=None,
-            connect=10,
-            sock_read=30,
-            sock_connect=10
-        )
+        active_downloads += 1
+        filepath = os.path.join(DOWNLOAD_PATH, filename)
+        progress_tracker = ProgressTracker()
         
-        # Fixed session creation - removed conflicting parameters
-        async with aiohttp.ClientSession(
-            connector=connector, 
-            timeout=timeout
-        ) as session:
+        try:
+            connector = aiohttp.TCPConnector(
+                limit=200,
+                limit_per_host=50,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                enable_cleanup_closed=True,
+                keepalive_timeout=30,
+                force_close=False
+            )
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
+            timeout = aiohttp.ClientTimeout(
+                total=None,
+                connect=10,
+                sock_read=30,
+                sock_connect=10
+            )
             
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    logger.error(f"HTTP {response.status} for {url}")
-                    return None
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                headers = {
+                    'User -Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache'
+                }
                 
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                start_time = time.time()
-                last_text = ""
-                
-                # Use larger buffer for faster writing
-                async with aiofiles.open(filepath, 'wb', buffering=CHUNK_SIZE) as file:
-                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                        await file.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        current_time = time.time()
-                        
-                        if progress_tracker.should_update(current_time):
-                            try:
-                                # Calculate speeds
-                                elapsed = current_time - start_time
-                                avg_speed = downloaded / elapsed if elapsed > 0 else 0
-                                instant_speed = progress_tracker.calculate_instant_speed(downloaded, current_time)
-                                smoothed_speed = progress_tracker.speed_calculator.get_smoothed_speed()
-                                
-                                # Use smoothed speed for ETA calculation
-                                eta_seconds = (total_size - downloaded) / smoothed_speed if smoothed_speed > 0 else 0
-                                
-                                progress_bar = get_progress_bar(downloaded, total_size)
-                                percent = (downloaded / total_size) * 100 if total_size > 0 else 0
-                                
-                                # Get system info for optimization
-                                sys_info = get_system_info()
-                                
-                                progress_text = (
-                                    f"📥 **Downloading:** `{filename[:25]}...`\n\n"
-                                    f"{progress_bar}\n"
-                                    f"📊 **Progress:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total_size)}` ({percent:.1f}%)\n"
-                                    f"⚡ **Speed:** `{humanize.naturalsize(smoothed_speed)}/s` (Avg: `{humanize.naturalsize(avg_speed)}/s`)\n"
-                                    f"⏱️ **ETA:** `{humanize.naturaldelta(eta_seconds)}`\n"
-                                    f"💾 **RAM:** `{sys_info.get('memory_percent', 0):.1f}%` | **CPU:** `{sys_info.get('cpu', 0):.1f}%`\n"
-                                    f"🔄 **Status:** `Downloading...`"
-                                )
-                                
-                                if progress_text != last_text:
-                                    await safe_edit_message(progress_message, progress_text)
-                                    last_text = progress_text
+                async with session.get(url, headers=headers) as response:
+                    if response.status != 200:
+                        logger.error(f"HTTP {response.status} for {url}")
+                        return None
+                    
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    start_time = time.time()
+                    last_text = ""
+                    
+                    async with aiofiles.open(filepath, 'wb', buffering=CHUNK_SIZE) as file:
+                        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                            await file.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            current_time = time.time()
+                            
+                            if progress_tracker.should_update(current_time):
+                                try:
+                                    elapsed = current_time - start_time
+                                    avg_speed = downloaded / elapsed if elapsed > 0 else 0
+                                    instant_speed = progress_tracker.calculate_instant_speed(downloaded, current_time)
+                                    smoothed_speed = progress_tracker.speed_calculator.get_smoothed_speed()
                                     
-                            except Exception as e:
-                                logger.error(f"Progress update error: {e}")
+                                    eta_seconds = (total_size - downloaded) / smoothed_speed if smoothed_speed > 0 else 0
+                                    
+                                    progress_bar = get_progress_bar(downloaded, total_size)
+                                    percent = (downloaded / total_size) * 100 if total_size > 0 else 0
+                                    
+                                    progress_text = (
+                                        f"📥 **Downloading:** `{filename[:25]}...`\n\n"
+                                        f"{progress_bar}\n"
+                                        f"📊 **Progress:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total_size)}` ({percent:.1f}%)\n"
+                                        f"⚡ **Speed:** `{humanize.naturalsize(smoothed_speed)}/s` (Avg: `{humanize.naturalsize(avg_speed)}/s`)\n"
+                                        f"⏱️ **ETA:** `{humanize.naturaldelta(eta_seconds)}`\n"
+                                        f"💾 **RAM:** `{sys_info.get('memory_percent', 0):.1f}%` | **CPU:** `{sys_info.get('cpu', 0):.1f}%`\n"
+                                        f"🔄 **Status:** `Downloading...`"
+                                    )
+                                    
+                                    if progress_text != last_text:
+                                        await safe_edit_message(progress_message, progress_text)
+                                        last_text = progress_text
+                                    
+                                except Exception as e:
+                                    logger.error(f"Progress update error: {e}")
                 
-                # Verify file integrity
                 if os.path.getsize(filepath) != total_size:
                     logger.warning(f"File size mismatch: {os.path.getsize(filepath)} != {total_size}")
                 
                 return filepath
                 
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None
-    finally:
-        active_downloads -= 1
+        except Exception as e:
+            logger.error(f"Download error: {e}")
+            return None
+        finally:
+            active_downloads -= 1
+async def download_manager(urls, user_id):
+    """Manage multiple downloads concurrently"""
+    tasks = []
+    for url in urls:
+        filename = url.split("/")[-1]  # Extract filename from URL
+        progress_message = await send_initial_progress_message(user_id, filename)  # Function to send initial message
+        tasks.append(download_file_ultra_fast(url, filename, user_id, progress_message))
+    
+    # Wait for all downloads to complete
+    await asyncio.gather(*tasks)
 
+async def send_initial_progress_message(user_id, filename):
+    """Send an initial progress message for the download"""
+    return await client.send_message(user_id, f"📥 **Starting download for:** `{filename}`")
+    
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "stats"]))
+async def handle_url(client, message):
+    """Handle URL and manage downloads"""
+    url = message.text.strip()
+    
+    # Validate URL and extract multiple URLs if needed
+    urls = [url]  # You can modify this to handle multiple URLs if needed
+    
+    # Start the download manager
+    await download_manager(urls, message.from_user.id)
+    
 
 async def upload_with_progress(client, chat_id, filepath, caption, file_type, progress_message):
     """Upload file with optimized progress tracking"""
