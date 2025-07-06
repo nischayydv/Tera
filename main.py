@@ -1,3 +1,4 @@
+)
 import asyncio
 import os
 import time
@@ -46,6 +47,7 @@ class ProgressHook:
         self.user_id = user_id
         self.message = message
         self.last_update = 0
+        self.loop = asyncio.get_event_loop()
         
     def __call__(self, d):
         if d['status'] == 'downloading':
@@ -59,16 +61,33 @@ class ProgressHook:
                     
                     if total > 0:
                         progress_bar = get_progress_bar(downloaded, total)
-                        asyncio.create_task(self.message.edit_text(
-                            f"📥 **Downloading:** `{d.get('filename', 'Unknown')}`\n\n"
-                            f"{progress_bar}\n"
-                            f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total)}`\n"
-                            f"⚡ **Speed:** `{humanize.naturalsize(speed)}/s`\n"
-                            f"⏱️ **ETA:** `{eta}s`"
-                        ))
+                        
+                        # Schedule the coroutine properly
+                        if self.loop.is_running():
+                            asyncio.create_task(self.update_progress(
+                                d.get('filename', 'Unknown'),
+                                progress_bar,
+                                downloaded,
+                                total,
+                                speed,
+                                eta
+                            ))
+                        
                         self.last_update = current_time
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Progress hook error: {e}")
+    
+    async def update_progress(self, filename, progress_bar, downloaded, total, speed, eta):
+        try:
+            await self.message.edit_text(
+                f"📥 **Downloading:** `{os.path.basename(filename)}`\n\n"
+                f"{progress_bar}\n"
+                f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total)}`\n"
+                f"⚡ **Speed:** `{humanize.naturalsize(speed)}/s`\n"
+                f"⏱️ **ETA:** `{eta}s`"
+            )
+        except Exception as e:
+            logger.error(f"Progress update error: {e}")
 
 async def add_user(user_id, username):
     user_data = {
@@ -120,7 +139,7 @@ def get_progress_bar(current, total, length=20):
     bar = "█" * filled + "░" * (length - filled)
     return f"{bar} {percent:.1f}%"
 
-async def download_with_ytdlp(url, output_path, progress_hook=None):
+def download_with_ytdlp(url, output_path, progress_hook=None):
     """Download using yt-dlp with optimizations"""
     ydl_opts = {
         'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
@@ -239,7 +258,10 @@ async def download_callback(client, callback: CallbackQuery):
     # Download with yt-dlp
     filepath, info = await asyncio.get_event_loop().run_in_executor(
         None, 
-        lambda: download_with_ytdlp(file_info['proxy_url'], DOWNLOAD_PATH, progress_hook)
+        download_with_ytdlp,
+        file_info['proxy_url'], 
+        DOWNLOAD_PATH, 
+        progress_hook
     )
     
     if not filepath or not os.path.exists(filepath):
@@ -247,16 +269,33 @@ async def download_callback(client, callback: CallbackQuery):
         
         # Fallback to direct download
         try:
-            import aiohttp
             import aiofiles
+            
+            await progress_msg.edit_text(
+                "📥 **Downloading with fallback method...**\n\n"
+                "🔄 Using direct HTTP download..."
+            )
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(file_info['proxy_url']) as response:
                     if response.status == 200:
                         filepath = os.path.join(DOWNLOAD_PATH, file_info['file_name'])
+                        total_size = int(response.headers.get('content-length', 0))
+                        downloaded = 0
+                        
                         async with aiofiles.open(filepath, 'wb') as f:
                             async for chunk in response.content.iter_chunked(1024*1024):
                                 await f.write(chunk)
+                                downloaded += len(chunk)
+                                
+                                # Update progress every 2MB
+                                if downloaded % (2*1024*1024) == 0 and total_size > 0:
+                                    progress_bar = get_progress_bar(downloaded, total_size)
+                                    await progress_msg.edit_text(
+                                        f"📥 **Fallback Download:** `{file_info['file_name']}`\n\n"
+                                        f"{progress_bar}\n"
+                                        f"📊 **Downloaded:** `{humanize.naturalsize(downloaded)}` / `{humanize.naturalsize(total_size)}`"
+                                    )
                     else:
                         await progress_msg.edit_text("❌ **Download failed completely!**")
                         return
@@ -443,4 +482,4 @@ async def back_callback(client, callback: CallbackQuery):
 
 if __name__ == "__main__":
     print("🚀 Starting Terabox Download Bot with yt-dlp...")
-    app.run()
+    app.run()    app.run()
