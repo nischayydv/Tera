@@ -1328,39 +1328,45 @@ async def help_callback(client, callback: CallbackQuery):
 @app.on_callback_query(filters.regex("^back$"))
 async def back_callback(client, callback: CallbackQuery):
     """Enhanced back to main menu"""
-    sys_info = get_system_info()
-    
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 Stats", callback_data="stats"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-            InlineKeyboardButton("🚀 Performance", callback_data="performance")
-        ]
-    ])
-    
-    welcome_text = (
-        "🚀 **Advanced Terabox Download Bot v3.0**\n\n"
-        "✨ **Enhanced Features:**\n"
-        "• YT-DLP powered ultra-fast downloads\n"
-        "• Full CPU utilization for maximum speed\n"
-        "• Real-time progress tracking\n"
-        "• Smart file type detection\n"
-        "• Automatic thumbnail generation\n"
-        "• Image optimization with Pillow\n"
-        "• Advanced error handling with fallbacks\n\n"
-        f"💾 **Server Status:**\n"
-        f"• CPU: `{sys_info.get('cpu', 0):.1f}%`\n"
-        f"• RAM: `{sys_info.get('memory_percent', 0):.1f}%`\n"
-        f"• Active Downloads: `{active_downloads}/{MAX_CONCURRENT_DOWNLOADS}`\n\n"
-        "📨 **Usage:** Just send me a Terabox URL!\n\n"
-        "🔥 **Powered by YT-DLP + AI algorithms**\n"
-        "📤 **Credits:** @NY_BOTS"
-    )
-    
-    await safe_edit_message(callback.message, welcome_text, keyboard)
+    try:
+        sys_info = get_system_info()
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 Stats", callback_data="stats"),
+                InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+            ],
+            [
+                InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+                InlineKeyboardButton("🚀 Performance", callback_data="performance")
+            ]
+        ])
+        
+        welcome_text = (
+            "🚀 **Advanced Terabox Download Bot v3.0**\n\n"
+            "✨ **Enhanced Features:**\n"
+            "• YT-DLP powered ultra-fast downloads\n"
+            "• Full CPU utilization for maximum speed\n"
+            "• Real-time progress tracking\n"
+            "• Smart file type detection\n"
+            "• Automatic thumbnail generation\n"
+            "• Image optimization with Pillow\n"
+            "• Advanced error handling with fallbacks\n\n"
+            f"💾 **Server Status:**\n"
+            f"• CPU: `{sys_info.get('cpu', 0):.1f}%`\n"
+            f"• RAM: `{sys_info.get('memory_percent', 0):.1f}%`\n"
+            f"• Active Downloads: `{active_downloads}/{MAX_CONCURRENT_DOWNLOADS}`\n\n"
+            "📨 **Usage:** Just send me a Terabox URL!\n\n"
+            "🔥 **Powered by YT-DLP + AI algorithms**\n"
+            "📤 **Credits:** @NY_BOTS"
+        )
+        
+        await safe_edit_message(callback.message, welcome_text, keyboard)
+        await callback.answer()
+        
+    except Exception as e:
+        logger.error(f"Back callback error: {e}")
+        await callback.answer("❌ Error occurred!", show_alert=True)
 
 # Cleanup functions
 async def cleanup_old_progress():
@@ -1412,65 +1418,70 @@ ADMIN_IDS = [123456789, 987654321]  # Add your admin IDs
 @app.on_message(filters.command("broadcast") & filters.user(ADMIN_IDS))
 async def enhanced_broadcast(client, message):
     """Enhanced broadcast with progress tracking"""
-    if len(message.command) < 2:
-        await message.reply_text("❌ **Usage:** `/broadcast <message>`")
-        return
-    
-    broadcast_text = message.text.split(None, 1)[1]
-    users = await users_collection.find({}).to_list(None)
-    
-    success = 0
-    failed = 0
-    blocked = 0
-    
-    status_msg = await message.reply_text(
-        f"📢 **Enhanced Broadcast Starting...**\n\n"
-        f"👥 **Target Users:** `{len(users)}`\n"
-        f"⏳ **Status:** `Initializing...`"
-    )
-    
-    start_time = time.time()
-    
-    for i, user in enumerate(users):
-        try:
-            await client.send_message(user['user_id'], broadcast_text)
-            success += 1
-        except Exception as e:
-            failed += 1
-            error_str = str(e).lower()
-            if "blocked" in error_str or "user is deactivated" in error_str:
-                blocked += 1
-            logger.error(f"Broadcast failed for {user['user_id']}: {e}")
+    try:
+        if len(message.command) < 2:
+            await message.reply_text("❌ **Usage:** `/broadcast <message>`")
+            return
         
-        # Update status every 25 users
-        if (i + 1) % 25 == 0:
-            elapsed = time.time() - start_time
-            remaining = len(users) - (i + 1)
-            eta = (elapsed / (i + 1)) * remaining if i > 0 else 0
+        broadcast_text = message.text.split(None, 1)[1]
+        users = await users_collection.find({}).to_list(None)
+        
+        success = 0
+        failed = 0
+        blocked = 0
+        
+        status_msg = await message.reply_text(
+            f"📢 **Enhanced Broadcast Starting...**\n\n"
+            f"👥 **Target Users:** `{len(users)}`\n"
+            f"⏳ **Status:** `Initializing...`"
+        )
+        
+        start_time = time.time()
+        
+        for i, user in enumerate(users):
+            try:
+                await client.send_message(user['user_id'], broadcast_text)
+                success += 1
+            except Exception as e:
+                failed += 1
+                error_str = str(e).lower()
+                if "blocked" in error_str or "user is deactivated" in error_str:
+                    blocked += 1
+                logger.error(f"Broadcast failed for {user['user_id']}: {e}")
             
-            progress_text = (
-                f"📢 **Broadcasting...**\n\n"
-                f"✅ **Success:** `{success}`\n"
-                f"❌ **Failed:** `{failed}`\n"
-                f"🚫 **Blocked:** `{blocked}`\n"
-                f"⏳ **Remaining:** `{remaining}`\n"
-                f"⏱️ **ETA:** `{humanize.naturaldelta(eta)}`\n"
-                f"📊 **Progress:** `{((i + 1) / len(users)) * 100:.1f}%`"
-            )
-            await safe_edit_message(status_msg, progress_text)
-    
-    total_time = time.time() - start_time
-    final_text = (
-        f"📢 **Broadcast Completed!**\n\n"
-        f"✅ **Success:** `{success}`\n"
-        f"❌ **Failed:** `{failed}`\n"
-        f"🚫 **Blocked:** `{blocked}`\n"
-        f"📊 **Total:** `{len(users)}`\n"
-        f"⏱️ **Time Taken:** `{humanize.naturaldelta(total_time)}`\n"
-        f"📈 **Success Rate:** `{(success / len(users)) * 100:.1f}%`"
-    )
-    
-    await safe_edit_message(status_msg, final_text)
+            # Update status every 25 users
+            if (i + 1) % 25 == 0:
+                elapsed = time.time() - start_time
+                remaining = len(users) - (i + 1)
+                eta = (elapsed / (i + 1)) * remaining if i > 0 else 0
+                
+                progress_text = (
+                    f"📢 **Broadcasting...**\n\n"
+                    f"✅ **Success:** `{success}`\n"
+                    f"❌ **Failed:** `{failed}`\n"
+                    f"🚫 **Blocked:** `{blocked}`\n"
+                    f"⏳ **Remaining:** `{remaining}`\n"
+                    f"⏱️ **ETA:** `{humanize.naturaldelta(eta)}`\n"
+                    f"📊 **Progress:** `{((i + 1) / len(users)) * 100:.1f}%`"
+                )
+                await safe_edit_message(status_msg, progress_text)
+        
+        total_time = time.time() - start_time
+        final_text = (
+            f"📢 **Broadcast Completed!**\n\n"
+            f"✅ **Success:** `{success}`\n"
+            f"❌ **Failed:** `{failed}`\n"
+            f"🚫 **Blocked:** `{blocked}`\n"
+            f"📊 **Total:** `{len(users)}`\n"
+            f"⏱️ **Time Taken:** `{humanize.naturaldelta(total_time)}`\n"
+            f"📈 **Success Rate:** `{(success / len(users)) * 100:.1f}%`"
+        )
+        
+        await safe_edit_message(status_msg, final_text)
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        await message.reply_text(f"❌ Broadcast failed: {str(e)}")
 
 @app.on_message(filters.command("stats_admin") & filters.user(ADMIN_IDS))
 async def admin_stats_command(client, message):
@@ -1583,16 +1594,16 @@ async def initialize_enhanced_bot():
     """Enhanced bot initialization"""
     logger.info("🚀 Initializing Enhanced Terabox Download Bot v3.0...")
     
-    # Test database connection
     try:
+        # Test database connection
         await users_collection.find_one({})
         logger.info("✅ Database connection successful")
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
         return False
     
-    # Create optimized indexes
     try:
+        # Create optimized indexes
         await users_collection.create_index("user_id", unique=True)
         await users_collection.create_index("last_active")
         await stats_collection.create_index("user_id")
@@ -1619,8 +1630,8 @@ async def cleanup_on_shutdown():
     """Enhanced cleanup when bot shuts down"""
     logger.info("🛑 Enhanced bot shutting down...")
     
-    # Clean up temporary files
     try:
+        # Clean up temporary files
         if os.path.exists(DOWNLOAD_PATH):
             for filename in os.listdir(DOWNLOAD_PATH):
                 if filename:
@@ -1632,7 +1643,6 @@ async def cleanup_on_shutdown():
                         logger.error(f"Error removing file {filepath}: {e}")
     except Exception as e:
         logger.error(f"File cleanup error: {e}")
-    
     # Clear progress data
     download_progress.clear()
     upload_progress.clear()
@@ -1656,345 +1666,4 @@ async def handle_unknown_callbacks(client, callback: CallbackQuery):
 if __name__ == "__main__":
     logger.info("🚀 Starting Enhanced Terabox Download Bot v3.0 with YT-DLP...")
     
-    try:
-        # Run enhanced initialization
-        init_success = asyncio.get_event_loop().run_until_complete(initialize_enhanced_bot())
-        
-        if not init_success:
-            logger.error("❌ Bot initialization failed")@app.on_callback_query(filters.regex("^back$"))
-async def back_callback(client, callback: CallbackQuery):
-    """Enhanced back to main menu"""
-    sys_info = get_system_info()
-    
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 Stats", callback_data="stats"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ Help", callback_data="help"),
-            InlineKeyboardButton("🚀 Performance", callback_data="performance")
-        ]
-    ])
-    
-    welcome_text = (
-        "🚀 **Advanced Terabox Download Bot v3.0**\n\n"
-        "✨ **Enhanced Features:**\n"
-        "• YT-DLP powered ultra-fast downloads\n"
-        "• Full CPU utilization for maximum speed\n"
-        "• Real-time progress tracking\n"
-        "• Smart file type detection\n"
-        "• Automatic thumbnail generation\n"
-        "• Image optimization with Pillow\n"
-        "• Advanced error handling with fallbacks\n\n"
-        f"💾 **Server Status:**\n"
-        f"• CPU: `{sys_info.get('cpu', 0):.1f}%`\n"
-        f"• RAM: `{sys_info.get('memory_percent', 0):.1f}%`\n"
-        f"• Active Downloads: `{active_downloads}/{MAX_CONCURRENT_DOWNLOADS}`\n\n"
-        "📨 **Usage:** Just send me a Terabox URL!\n\n"
-        "🔥 **Powered by YT-DLP + AI algorithms**\n"
-        "📤 **Credits:** @NY_BOTS"
-    )
-    
-    await safe_edit_message(callback.message, welcome_text, keyboard)
-
-# Cleanup functions
-async def cleanup_old_progress():
-    """Clean up old progress data periodically"""
-    while True:
-        try:
-            current_time = time.time()
-            to_remove = []
-            
-            for msg_id, data in download_progress.items():
-                if current_time - data.get('created_at', 0) > 3600:  # 1 hour
-                    to_remove.append(msg_id)
-            
-            for msg_id in to_remove:
-                del download_progress[msg_id]
-            
-            if to_remove:
-                logger.info(f"Cleaned up {len(to_remove)} old progress entries")
-            
-            await asyncio.sleep(300)  # Run every 5 minutes
-            
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
-            await asyncio.sleep(60)
-
-async def global_error_handler():
-    """Global error monitoring"""
-    while True:
-        try:
-            # Monitor system resources
-            sys_info = get_system_info()
-            
-            # Log warnings if resources are high
-            if sys_info.get('cpu', 0) > 90:
-                logger.warning(f"High CPU usage: {sys_info.get('cpu', 0):.1f}%")
-            
-            if sys_info.get('memory_percent', 0) > 90:
-                logger.warning(f"High memory usage: {sys_info.get('memory_percent', 0):.1f}%")
-            
-            await asyncio.sleep(60)  # Check every minute
-            
-        except Exception as e:
-            logger.error(f"Global error handler: {e}")
-            await asyncio.sleep(60)
-
-# Admin commands
-ADMIN_IDS = [123456789, 987654321]  # Add your admin IDs
-
-@app.on_message(filters.command("broadcast") & filters.user(ADMIN_IDS))
-async def enhanced_broadcast(client, message):
-    """Enhanced broadcast with progress tracking"""
-    if len(message.command) < 2:
-        await message.reply_text("❌ **Usage:** `/broadcast <message>`")
-        return
-    
-    broadcast_text = message.text.split(None, 1)[1]
-    users = await users_collection.find({}).to_list(None)
-    
-    success = 0
-    failed = 0
-    blocked = 0
-    
-    status_msg = await message.reply_text(
-        f"📢 **Enhanced Broadcast Starting...**\n\n"
-        f"👥 **Target Users:** `{len(users)}`\n"
-        f"⏳ **Status:** `Initializing...`"
-    )
-    
-    start_time = time.time()
-    
-    for i, user in enumerate(users):
-        try:
-            await client.send_message(user['user_id'], broadcast_text)
-            success += 1
-        except Exception as e:
-            failed += 1
-            error_str = str(e).lower()
-            if "blocked" in error_str or "user is deactivated" in error_str:
-                blocked += 1
-            logger.error(f"Broadcast failed for {user['user_id']}: {e}")
-        
-        # Update status every 25 users
-        if (i + 1) % 25 == 0:
-            elapsed = time.time() - start_time
-            remaining = len(users) - (i + 1)
-            eta = (elapsed / (i + 1)) * remaining if i > 0 else 0
-            
-            progress_text = (
-                f"📢 **Broadcasting...**\n\n"
-                f"✅ **Success:** `{success}`\n"
-                f"❌ **Failed:** `{failed}`\n"
-                f"🚫 **Blocked:** `{blocked}`\n"
-                f"⏳ **Remaining:** `{remaining}`\n"
-                f"⏱️ **ETA:** `{humanize.naturaldelta(eta)}`\n"
-                f"📊 **Progress:** `{((i + 1) / len(users)) * 100:.1f}%`"
-            )
-            await safe_edit_message(status_msg, progress_text)
-    
-    total_time = time.time() - start_time
-    final_text = (
-        f"📢 **Broadcast Completed!**\n\n"
-        f"✅ **Success:** `{success}`\n"
-        f"❌ **Failed:** `{failed}`\n"
-        f"🚫 **Blocked:** `{blocked}`\n"
-        f"📊 **Total:** `{len(users)}`\n"
-        f"⏱️ **Time Taken:** `{humanize.naturaldelta(total_time)}`\n"
-        f"📈 **Success Rate:** `{(success / len(users)) * 100:.1f}%`"
-    )
-    
-    await safe_edit_message(status_msg, final_text)
-
-@app.on_message(filters.command("stats_admin") & filters.user(ADMIN_IDS))
-async def admin_stats_command(client, message):
-    """Enhanced admin statistics"""
-    try:
-        total_users, total_downloads, total_size = await get_user_stats()
-        active_users = await users_collection.count_documents({
-            "last_active": {"$gte": datetime.now().replace(hour=0, minute=0, second=0)}
-        })
-        
-        # Get recent users
-        recent_users = await users_collection.find({}).sort("join_date", -1).limit(10).to_list(10)
-        
-        recent_list = ""
-        for user in recent_users:
-            username = user.get('username', 'Unknown')
-            join_date = user.get('join_date', datetime.now()).strftime('%Y-%m-%d')
-            downloads = user.get('downloads', 0)
-            recent_list += f"• @{username} ({downloads} downloads) - {join_date}\n"
-        
-        # System information
-        sys_info = get_system_info()
-        
-        admin_stats_text = (
-            f"👑 **Enhanced Admin Dashboard v3.0**\n\n"
-            f"📊 **User Statistics:**\n"
-            f"• Total Users: `{total_users:,}`\n"
-            f"• Active Today: `{active_users:,}`\n"
-            f"• Activity Rate: `{(active_users/max(total_users,1))*100:.1f}%`\n\n"
-            f"📥 **Download Statistics:**\n"
-            f"• Total Downloads: `{total_downloads:,}`\n"
-            f"• Total Data: `{humanize.naturalsize(total_size)}`\n\n"
-            f"🏆 **Recent Users:**\n{recent_list}\n"
-            f"🖥️ **System Status:**\n"
-            f"• CPU: `{sys_info.get('cpu', 0):.1f}%`\n"
-            f"• RAM: `{sys_info.get('memory_percent', 0):.1f}%`\n"
-            f"• Storage: `{humanize.naturalsize(sys_info.get('disk_free', 0))} free`\n"
-            f"• Active Downloads: `{active_downloads}/{MAX_CONCURRENT_DOWNLOADS}`\n\n"
-            f"📈 **Performance:** Excellent with YT-DLP\n"
-            f"🚀 **Status:** Fully Operational"
-        )
-        
-        await message.reply_text(admin_stats_text)
-        
-    except Exception as e:
-        logger.error(f"Admin stats error: {e}")
-        await message.reply_text(f"❌ Error generating admin stats: {str(e)}")
-
-@app.on_message(filters.command("cleanup_admin") & filters.user(ADMIN_IDS))
-async def admin_cleanup_command(client, message):
-    """Enhanced cleanup command for admins"""
-    try:
-        cleanup_msg = await message.reply_text("🧹 **Starting Enhanced Cleanup...**")
-        
-        # Clean up download directory
-        files_removed = 0
-        if os.path.exists(DOWNLOAD_PATH):
-            for filename in os.listdir(DOWNLOAD_PATH):
-                if filename:
-                    filepath = os.path.join(DOWNLOAD_PATH, filename)
-                    try:
-                        file_age = time.time() - os.path.getctime(filepath)
-                        if file_age > 3600:  # Remove files older than 1 hour
-                            os.remove(filepath)
-                            files_removed += 1
-                    except Exception as e:
-                        logger.error(f"Error removing file {filepath}: {e}")
-        
-        # Clean up old progress data
-        old_progress = len(download_progress)
-        current_time = time.time()
-        to_remove = [
-            msg_id for msg_id, data in download_progress.items()
-            if current_time - data.get('created_at', 0) > 1800  # 30 minutes
-        ]
-        for msg_id in to_remove:
-            del download_progress[msg_id]
-        
-        # Clean up old database entries
-        old_date = datetime.now() - timedelta(days=30)
-        old_stats_removed = await stats_collection.delete_many({
-            "download_date": {"$lt": old_date}
-        })
-        
-        # Get system info after cleanup
-        sys_info = get_system_info()
-        
-        cleanup_text = (
-            f"🧹 **Enhanced Cleanup Completed!**\n\n"
-            f"📁 **Files Cleaned:**\n"
-            f"• Temporary files: `{files_removed}`\n"
-            f"• Progress entries: `{len(to_remove)}`\n"
-            f"• Old stats: `{old_stats_removed.deleted_count}`\n\n"
-            f"💾 **System Status:**\n"
-            f"• CPU: `{sys_info.get('cpu', 0):.1f}%`\n"
-            f"• RAM: `{sys_info.get('memory_percent', 0):.1f}%`\n"
-            f"• Storage: `{humanize.naturalsize(sys_info.get('disk_free', 0))} free`\n\n"
-            f"✅ **Status:** System Optimized for YT-DLP\n"
-            f"🚀 **Performance:** Enhanced"
-        )
-        
-        await safe_edit_message(cleanup_msg, cleanup_text)
-        
-    except Exception as e:
-        logger.error(f"Admin cleanup error: {e}")
-        await message.reply_text(f"❌ Cleanup failed: {str(e)}")
-
-# Bot initialization and startup
-async def initialize_enhanced_bot():
-    """Enhanced bot initialization"""
-    logger.info("🚀 Initializing Enhanced Terabox Download Bot v3.0...")
-    
-    # Test database connection
-    try:
-        await users_collection.find_one({})
-        logger.info("✅ Database connection successful")
-    except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
-        return False
-    
-    # Create optimized indexes
-    try:
-        await users_collection.create_index("user_id", unique=True)
-        await users_collection.create_index("last_active")
-        await stats_collection.create_index("user_id")
-        await stats_collection.create_index("download_date")
-        await stats_collection.create_index([("user_id", 1), ("download_date", -1)])
-        logger.info("✅ Database indexes created/verified")
-    except Exception as e:
-        logger.error(f"❌ Error creating indexes: {e}")
-    
-    # Test system resources
-    sys_info = get_system_info()
-    logger.info(f"💾 System Status - CPU: {sys_info.get('cpu', 0):.1f}%, RAM: {sys_info.get('memory_percent', 0):.1f}%")
-    logger.info(f"🔧 CPU Cores Available: {MAX_CONCURRENT_DOWNLOADS}")
-    
-    # Start background tasks
-    asyncio.create_task(cleanup_old_progress())
-    asyncio.create_task(global_error_handler())
-    
-    logger.info("✅ Enhanced bot initialization completed with YT-DLP")
-    return True
-
-# Enhanced shutdown cleanup
-async def cleanup_on_shutdown():
-    """Enhanced cleanup when bot shuts down"""
-    logger.info("🛑 Enhanced bot shutting down...")
-    
-    # Clean up temporary files
-    try:
-        if os.path.exists(DOWNLOAD_PATH):
-            for filename in os.listdir(DOWNLOAD_PATH):
-                if filename:
-                    filepath = os.path.join(DOWNLOAD_PATH, filename)
-                    try:
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
-                    except Exception as e:
-                        logger.error(f"Error removing file {filepath}: {e}")
-    except Exception as e:
-        logger.error(f"File cleanup error: {e}")
-    
-    # Clear progress data
-    download_progress.clear()
-    upload_progress.clear()
-    
-    # Close database connections
-    try:
-        if mongo_client:
-            mongo_client.close()
-    except Exception as e:
-        logger.error(f"Database cleanup error: {e}")
-    
-    logger.info("✅ Enhanced cleanup completed")
-
-# Error handler for unknown callbacks
-@app.on_callback_query()
-async def handle_unknown_callbacks(client, callback: CallbackQuery):
-    """Handle unknown callback queries"""
-    await callback.answer("❌ Unknown action or session expired!", show_alert=True)
-
-# Main execution with enhanced error handling
-if __name__ == "__main__":
-    logger.info("🚀 Starting Enhanced Terabox Download Bot v3.0 with YT-DLP...")
-    
-    try:
-        # Run enhanced initialization
-        init_success = asyncio.get_event_loop().run_until_complete(initialize_enhanced_bot())
-        
-        if not init_success:
-            logger.error("❌ Bot initialization failed")
+  
