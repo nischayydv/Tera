@@ -19,7 +19,6 @@ MONGO_URI = "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?ret
 FORCE_SUB_CHANNEL = "@NY_BOTS"
 LOG_CHANNEL = -1002732334186  # Your log channel ID
 OWNER_ID = 7910994767  # Your user ID
-
 # Initialize bot
 app = Client("terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -84,10 +83,24 @@ async def get_user_stats(user_id):
 async def check_force_sub(user_id):
     """Check if user is subscribed to force sub channel"""
     try:
+        # Skip force sub check for owner
+        if user_id == OWNER_ID:
+            return True
+            
+        # Get chat member info
         member = await app.get_chat_member(FORCE_SUB_CHANNEL, user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
+        
+        # Check if user is member, admin, or creator
+        if member.status in ["member", "administrator", "creator"]:
+            return True
+        elif member.status == "kicked":
+            return False
+        else:
+            return False
+    except Exception as e:
+        print(f"Error checking subscription for {user_id}: {e}")
+        # If channel doesn't exist or bot is not admin, skip force sub
+        return True
 
 async def download_file(url, filename, progress_callback=None):
     """Download file with progress tracking"""
@@ -112,24 +125,33 @@ async def start_command(client, message: Message):
     username = message.from_user.username
     first_name = message.from_user.first_name
     
+    print(f"User {user_id} ({first_name}) started the bot")
+    
+    # Add user to database
     await add_user(user_id, username, first_name)
     
-    # Check force subscription
-    if not await check_force_sub(user_id):
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")],
-            [InlineKeyboardButton("🔄 Check Again", callback_data="check_sub")]
-        ])
-        await message.reply_text(
-            f"🔒 **Access Denied!**\n\n"
-            f"You must join our channel to use this bot.\n"
-            f"Channel: {FORCE_SUB_CHANNEL}\n\n"
-            f"📌 Join the channel and click 'Check Again'",
-            reply_markup=keyboard,
-            message_effect_id=FIRE_EFFECT
-        )
-        return
+    # Skip force sub check for owner
+    if user_id != OWNER_ID:
+        # Check force subscription
+        is_subscribed = await check_force_sub(user_id)
+        print(f"Subscription check for {user_id}: {is_subscribed}")
+        
+        if not is_subscribed:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")],
+                [InlineKeyboardButton("🔄 Check Again", callback_data="check_sub")]
+            ])
+            await message.reply_text(
+                f"🔒 **Access Denied!**\n\n"
+                f"You must join our channel to use this bot.\n"
+                f"Channel: {FORCE_SUB_CHANNEL}\n\n"
+                f"📌 Join the channel and click 'Check Again'",
+                reply_markup=keyboard,
+                message_effect_id=FIRE_EFFECT
+            )
+            return
     
+    # Show welcome message
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
         [InlineKeyboardButton("ℹ️ Help", callback_data="help")],
@@ -164,6 +186,19 @@ Send me any Terabox link and I'll download it for you!
         reply_markup=keyboard,
         message_effect_id=FIRE_EFFECT
     )
+    
+    # Send log to owner
+    try:
+        await client.send_message(
+            OWNER_ID,
+            f"🆕 **New User Started Bot**\n\n"
+            f"👤 **Name:** {first_name}\n"
+            f"🆔 **User ID:** `{user_id}`\n"
+            f"📝 **Username:** @{username if username else 'None'}\n"
+            f"🕒 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+        )
+    except Exception as e:
+        print(f"Error sending log to owner: {e}")
 
 # Help command
 @app.on_callback_query(filters.regex("help"))
@@ -237,16 +272,51 @@ async def show_user_stats(user_id, context):
 @app.on_callback_query(filters.regex("check_sub"))
 async def check_sub_callback(client, callback: CallbackQuery):
     user_id = callback.from_user.id
+    first_name = callback.from_user.first_name
     
-    if await check_force_sub(user_id):
+    print(f"Checking subscription for {user_id}")
+    
+    # Skip for owner
+    if user_id == OWNER_ID:
         await callback.edit_message_text(
-            "✅ **Subscription Verified!**\n\n"
-            "Welcome to Terabox Download Bot! 🎉\n"
+            "✅ **Welcome Owner!**\n\n"
+            "You have full access to the bot! 🎉\n"
             "Send me a Terabox link to get started.",
             message_effect_id=FIRE_EFFECT
         )
+        return
+    
+    if await check_force_sub(user_id):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
+            [InlineKeyboardButton("ℹ️ Help", callback_data="help")],
+            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/NY_BOTS")]
+        ])
+        
+        await callback.edit_message_text(
+            f"✅ **Subscription Verified!**\n\n"
+            f"Welcome **{first_name}**! 🎉\n\n"
+            f"🔥 **Terabox Download Bot is ready!**\n\n"
+            f"Send me a Terabox link to download files instantly!\n\n"
+            f"**Credits:** @NY_BOTS",
+            reply_markup=keyboard,
+            message_effect_id=FIRE_EFFECT
+        )
+        
+        # Log successful subscription
+        try:
+            await client.send_message(
+                OWNER_ID,
+                f"✅ **User Subscribed**\n\n"
+                f"👤 **Name:** {first_name}\n"
+                f"🆔 **User ID:** `{user_id}`\n"
+                f"📝 **Username:** @{callback.from_user.username if callback.from_user.username else 'None'}\n"
+                f"🕒 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+            )
+        except Exception as e:
+            print(f"Error sending subscription log: {e}")
     else:
-        await callback.answer("❌ You haven't joined the channel yet!", show_alert=True)
+        await callback.answer("❌ You haven't joined the channel yet! Please join and try again.", show_alert=True)
 
 # Back to start callback
 @app.on_callback_query(filters.regex("back_to_start"))
@@ -270,16 +340,23 @@ async def back_to_start_callback(client, callback: CallbackQuery):
 async def handle_terabox_link(client, message: Message):
     user_id = message.from_user.id
     
-    # Check force subscription
-    if not await check_force_sub(user_id):
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")
-        ]])
-        await message.reply_text(
-            "🔒 Please join our channel first to use this bot!",
-            reply_markup=keyboard
-        )
+    # Skip commands
+    if message.text.startswith('/'):
         return
+    
+    print(f"Received message from {user_id}: {message.text[:50]}...")
+    
+    # Check force subscription (skip for owner)
+    if user_id != OWNER_ID:
+        if not await check_force_sub(user_id):
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{FORCE_SUB_CHANNEL[1:]}")
+            ]])
+            await message.reply_text(
+                "🔒 Please join our channel first to use this bot!",
+                reply_markup=keyboard
+            )
+            return
     
     text = message.text
     
@@ -305,8 +382,13 @@ async def handle_terabox_link(client, message: Message):
     try:
         # Get file information from API
         api_url = f"{TERABOX_API}{quote(text)}"
+        print(f"API URL: {api_url}")
+        
         response = requests.get(api_url, timeout=30)
+        print(f"API Response Status: {response.status_code}")
+        
         data = response.json()
+        print(f"API Response: {data}")
         
         if "error" in data:
             await processing_msg.edit_text(
@@ -317,11 +399,18 @@ async def handle_terabox_link(client, message: Message):
             return
         
         # Extract file information
-        file_name = data['file_name']
-        file_size = data['file_size']
-        size_bytes = data['size_bytes']
-        download_link = data['proxy_url']
+        file_name = data.get('file_name', 'Unknown')
+        file_size = data.get('file_size', 'Unknown')
+        size_bytes = data.get('size_bytes', 0)
+        download_link = data.get('proxy_url', '')
         thumbnail = data.get('thumbnail', '')
+        
+        if not download_link:
+            await processing_msg.edit_text(
+                "❌ **No download link found!**\n\n"
+                "Please try again with a different link."
+            )
+            return
         
         # Create download keyboard
         keyboard = InlineKeyboardMarkup([
@@ -360,17 +449,22 @@ async def handle_terabox_link(client, message: Message):
         
         await processing_msg.edit_text(file_info, reply_markup=keyboard)
         
-        # Log to channel
-        await client.send_message(
-            LOG_CHANNEL,
-            f"📥 **New Download Request**\n\n"
-            f"👤 **User:** {message.from_user.mention}\n"
-            f"📁 **File:** `{file_name}`\n"
-            f"📦 **Size:** `{file_size}`\n"
-            f"🕒 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
-        )
+        # Log to owner if LOG_CHANNEL is set
+        try:
+            if LOG_CHANNEL:
+                await client.send_message(
+                    LOG_CHANNEL,
+                    f"📥 **New Download Request**\n\n"
+                    f"👤 **User:** {message.from_user.mention}\n"
+                    f"📁 **File:** `{file_name}`\n"
+                    f"📦 **Size:** `{file_size}`\n"
+                    f"🕒 **Time:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+                )
+        except Exception as e:
+            print(f"Error sending log: {e}")
         
     except Exception as e:
+        print(f"Error processing link: {e}")
         await processing_msg.edit_text(
             f"❌ **Error occurred!**\n\n"
             f"Error: {str(e)}\n\n"
@@ -622,6 +716,18 @@ async def back_callback(client, callback: CallbackQuery):
 
 # Run the bot
 if __name__ == "__main__":
-    print("🔥 Terabox Download Bot Started!")
+    print("🔥 Terabox Download Bot Starting...")
     print("Credits: @NY_BOTS")
+    print(f"Owner ID: {OWNER_ID}")
+    print(f"Force Sub Channel: {FORCE_SUB_CHANNEL}")
+    print(f"Log Channel: {LOG_CHANNEL}")
+    
+    # Test MongoDB connection
+    try:
+        mongo_client.server_info()
+        print("✅ MongoDB connected successfully!")
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}")
+    
+    print("Bot is running... Press Ctrl+C to stop")
     app.run()
