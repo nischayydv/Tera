@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 API_ID = "24720215"
 API_HASH = "c0d3395590fecba19985f95d6300785e"
 BOT_TOKEN = "8037389280:AAG5WfzHcheszs-RHWL8WXszWPkrWjyulp8"
-MONGO_URI = "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URL = "mongodb+srv://Nischay999:Nischay999@cluster0.5kufo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 FORCE_SUB_CHANNEL = "@NY_BOTS"
 LOG_CHANNEL = -1002732334186  # Your log channel ID
 OWNER_ID = 7910994767  # Your user ID
