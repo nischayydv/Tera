@@ -700,7 +700,7 @@ async def settings_callback(client, callback: CallbackQuery):
         upload_type = "video"
         user_downloads = 0
         total_downloaded = 0
-            [InlineKeyboardButton(f"📹 Video {'✅' if upload_type == 'video' else '❌'}", callback_data="set_video")],
+        [InlineKeyboardButton(f"📹 Video {'✅' if upload_type == 'video' else '❌'}", callback_data="set_video")],
         [InlineKeyboardButton(f"📄 Document {'✅' if upload_type == 'document' else '❌'}", callback_data="set_document")],
         [InlineKeyboardButton("📊 My Stats", callback_data="my_stats")],
         [InlineKeyboardButton("🔙 Back", callback_data="back")]
