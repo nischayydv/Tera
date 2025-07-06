@@ -534,4 +534,4 @@ async def back_callback(client, callback: CallbackQuery):
 if __name__ == "__main__":
     print("🚀 Starting Terabox Download Bot...")
     print("📤 Credit: @NY_BOTS")
-    app.run()    app.run()
+    app.run()
