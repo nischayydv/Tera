@@ -294,21 +294,6 @@ async def download_manager(urls, user_id):
     # Wait for all downloads to complete
     await asyncio.gather(*tasks)
 
-async def send_initial_progress_message(user_id, filename):
-    """Send an initial progress message for the download"""
-    return await client.send_message(user_id, f"📥 **Starting download for:** `{filename}`")
-    
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "stats"]))
-async def handle_url(client, message):
-    """Handle URL and manage downloads"""
-    url = message.text.strip()
-    
-    # Validate URL and extract multiple URLs if needed
-    urls = [url]  # You can modify this to handle multiple URLs if needed
-    
-    # Start the download manager
-    await download_manager(urls, message.from_user.id)
-    
 
 async def upload_with_progress(client, chat_id, filepath, caption, file_type, progress_message):
     """Upload file with optimized progress tracking"""
