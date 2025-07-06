@@ -1663,7 +1663,21 @@ async def handle_unknown_callbacks(client, callback: CallbackQuery):
     await callback.answer("❌ Unknown action or session expired!", show_alert=True)
 
 # Main execution with enhanced error handling
+import logging
+import asyncio
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def main():
+    logger.info("Starting Enhanced Terabox Download Bot...")
+    # Your bot initialization and running code here
+
 if __name__ == "__main__":
-    logger.info("🚀 Starting Enhanced Terabox Download Bot v3.0 with YT-DLP...")
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+
     
   
