@@ -1641,10 +1641,7 @@ async def cleanup_on_shutdown():
     """Enhanced cleanup when bot shuts down"""
     logger.info("🛑 Enhanced bot shutting down...")
     
-    # Clean up temporary files
-    # In download_callback function - Line ~600-700
-finally:
-    # Fixed cleanup
+    # Clean up temporary fi
     try:
         if 'filepath' in locals() and filepath and os.path.exists(filepath):
             os.remove(filepath)
