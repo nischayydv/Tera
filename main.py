@@ -1,4 +1,3 @@
-)
 import asyncio
 import os
 import time
@@ -482,4 +481,4 @@ async def back_callback(client, callback: CallbackQuery):
 
 if __name__ == "__main__":
     print("🚀 Starting Terabox Download Bot with yt-dlp...")
-    app.run()    app.run()
+    app.run()
