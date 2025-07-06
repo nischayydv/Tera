@@ -237,6 +237,9 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
                     start_time = time.time()
                     last_text = ""
                     
+                    # Get system info once at the start of the download
+                    sys_info = get_system_info()
+                    
                     async with aiofiles.open(filepath, 'wb', buffering=CHUNK_SIZE) as file:
                         async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                             await file.write(chunk)
@@ -283,6 +286,7 @@ async def download_file_ultra_fast(url, filename, user_id, progress_message):
             return None
         finally:
             active_downloads -= 1
+
 async def download_manager(urls, user_id):
     """Manage multiple downloads concurrently"""
     tasks = []
